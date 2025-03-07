@@ -29,12 +29,12 @@ CONDA_PATHS = {
 # Scripts
 SCRIPT_DIR_ROOT = Path("/home/elizabeth/soft/my_scripts/My_quakeFlow_1")
 SCRIPTS = {
-    "generate_config": SCRIPT_DIR_ROOT/"generate_config.py",
-    "download_stations": SCRIPT_DIR_ROOT/"download_stations.py",
-    "data_download": SCRIPT_DIR_ROOT/"data_download.py",
-    "phasenet_predict": SCRIPT_DIR_ROOT/"predict.py",
-    "gamma_association": SCRIPT_DIR_ROOT/"gamma_association3.py",
-    "localizacion": SCRIPT_DIR_ROOT/"location_7.py"
+    "generate_config": SCRIPT_DIR_ROOT/"QQ_config.py",
+    "download_stations": SCRIPT_DIR_ROOT/"QQ_dl_stations.py",
+    "data_download": SCRIPT_DIR_ROOT/"QQ _dl_data.py",
+    "phasenet_predict": SCRIPT_DIR_ROOT/"QQ_predict.py",
+    "gamma_association": SCRIPT_DIR_ROOT/"QQ_gamma.py",
+    "localizacion": SCRIPT_DIR_ROOT/"QQ_ location.py"
 }
 
 # Control flags (Modify only these True/False values!)

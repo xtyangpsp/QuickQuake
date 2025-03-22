@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-
-
 import os
 import subprocess
 import pandas as pd
@@ -12,33 +10,36 @@ from pathlib import Path
 # MODIFIABLE CONFIGURATION - ADJUST THESE VALUES
 # =================================================================
 
+# Obtener rutas desde variables de entorno
+QUICKQUAKE_ROOT = Path(os.getenv("QUICKQUAKE_ROOT", "/home/elizabeth/soft/src/QuickQuake/quickquake"))
+PHASENET_ROOT = Path(os.getenv("PHASENET_ROOT", "/home/elizabeth/soft/src/QuakeFlow/PhaseNet"))
+
 # Time configuration
 START_TIME_STR = "2021-09-25T00:00:00"
 END_TIME_STR = "2021-09-25T06:00:00"
 INCREMENT_HOURS = 2
 
 # Directory configuration
-DATA_ROOT = Path("./data")
-PHASENET_MODEL = "/home/elizabeth/soft/src/phasenet_models/190703-214543/"
-VMODEL_DIR = Path("/home/elizabeth/soft/src/QuickQuake/vmodels")
-HYPO_BIN = "/home/elizabeth/hyp1.40/source/hyp1.40"
+DATA_ROOT = QUICKQUAKE_ROOT / "data"
+PHASENET_MODEL = PHASENET_ROOT / "model/190703-214543/"
+VMODEL_DIR = QUICKQUAKE_ROOT / "vmodels"
+HYPO_BIN = QUICKQUAKE_ROOT / "hyp1.40/source/hyp1.40"
 
-# Conda environments
+# Conda environments (ajusta los nombres si son diferentes)
 CONDA_PATHS = {
-    "quakeflow": "/home/elizabeth/anaconda3/envs/quakeflow/bin/python",
-    "phasenet": "/home/elizabeth/anaconda3/envs/phasenet/bin/python",
-    "hypoinv": "/home/elizabeth/anaconda3/envs/hypoinv/bin/python"
+    "quakeflow": os.path.expanduser("~/anaconda3/envs/quakeflow/bin/python"),
+    "phasenet": os.path.expanduser("~/anaconda3/envs/phasenet/bin/python"),
+    "hypoinv": os.path.expanduser("~/anaconda3/envs/hypoinv/bin/python")
 }
 
-# Scripts
-SCRIPT_DIR_ROOT = Path("/home/elizabeth/soft/my_scripts/My_quakeFlow_1")
+# Scripts (rutas relativas a QUICKQUAKE_ROOT)
 SCRIPTS = {
-    "generate_config": SCRIPT_DIR_ROOT/"QQ_config.py",
-    "download_stations": SCRIPT_DIR_ROOT/"QQ_dl_stations.py",
-    "data_download": SCRIPT_DIR_ROOT/"QQ _dl_data.py",
-    "phasenet_predict": SCRIPT_DIR_ROOT/"QQ_predict.py",
-    "gamma_association": SCRIPT_DIR_ROOT/"QQ_gamma.py",
-    "localizacion": SCRIPT_DIR_ROOT/"QQ_ location.py"
+    "generate_config": QUICKQUAKE_ROOT / "QQ_config.py",
+    "download_stations": QUICKQUAKE_ROOT / "QQ_dl_stations.py",
+    "data_download": QUICKQUAKE_ROOT / "QQ_dl_data.py",
+    "phasenet_predict": QUICKQUAKE_ROOT / "QQ_predict.py",
+    "gamma_association": QUICKQUAKE_ROOT / "QQ_gamma.py",
+    "localizacion": QUICKQUAKE_ROOT / "QQ_location.py"
 }
 
 # Control flags (Modify only these True/False values!)
@@ -47,7 +48,7 @@ RUN_DOWNLOAD = True
 RUN_PHASENET = True
 RUN_GAMMA = True
 RUN_LOCATION = True
-MERGE_RESULTS = True 
+MERGE_RESULTS = True
 
 # =================================================================
 # DO NOT MODIFY BELOW THIS LINE
@@ -76,26 +77,11 @@ def run_step(condition, command, step_name, output_file=None):
     except subprocess.CalledProcessError as e:
         print(f"[!] Error in {step_name}: {str(e)}")
         return False
-##########
+
 def process_interval(start, end, output_dir):
     """Processes a time interval."""
     # Step 1: Generate configuration
     config_file = output_dir / "config.json"
-    
-    
-    if RUN_GENERATE_CONFIG:
-    	command = [
-    			CONDA_PATHS["quakeflow"],
-            str(SCRIPTS["generate_config"]),
-            "--start", start.isoformat(),
-            "--end", end.isoformat(),
-            "--output", str(config_file)
-    		]
-    	step_name = "configuration generation"
- 	print("Running: "+step_name)
-    	subprocess.run(command, check=True)
-    			
-    ##########
     if not run_step(
         RUN_GENERATE_CONFIG,
         [
@@ -147,7 +133,7 @@ def process_interval(start, end, output_dir):
         [
             CONDA_PATHS["phasenet"],
             str(SCRIPTS["phasenet_predict"]),
-            "--model", PHASENET_MODEL,
+            "--model", str(PHASENET_MODEL),
             "--data_dir", str(output_dir / "waveforms"),
             "--data_list", str(output_dir / "input_data.csv"),
             "--stations", str(stations_file),
@@ -185,7 +171,7 @@ def process_interval(start, end, output_dir):
             str(SCRIPTS["localizacion"]),
             "--date_dir", str(output_dir),
             "--vmodel_dir", str(VMODEL_DIR),
-            "--hypo_bin", HYPO_BIN
+            "--hypo_bin", str(HYPO_BIN)
         ],
         "Hypoinverse Localization"
     ):
@@ -260,6 +246,6 @@ def main():
         print("\n\n" + "="*50)
         print("Iniciando consolidación de hyp_good.csv...")
         merge_hyp_good(DATA_ROOT)
+
 if __name__ == "__main__":
     main()
-    

@@ -1,61 +1,22 @@
 #!/bin/bash
 
-# -----------------------------------------------
-# Purpose: Configure system paths for QuickQuake
-# Works with: Base shell and Anaconda environments
-# -----------------------------------------------
+# --------------------------------------------------
+# Configuración Automática de QuickQuake
+# --------------------------------------------------
 
-# Configuration variables
-PROFILE_FILE='.bash_profile'  # Profile file to modify
-QQ_DIR='quickquake'           # Directory with scripts
+# Ruta absoluta al directorio raíz de QuickQuake (ajusta esto!)
+QUICKQUAKE_ROOT="/home/elizabeth/soft/my_scripts/My_quakeFlow_1"
+PHASENET_ROOT="/home/elizabeth/soft/src/QuakeFlow/PhaseNet"
 
-# -----------------------------------------------
-# 1. Make scripts executable
-# -----------------------------------------------
-echo "Step 1/3: Making scripts executable..."
+# 1. Agregar rutas críticas al PATH y PYTHONPATH
+echo "export QUICKQUAKE_ROOT=\"$QUICKQUAKE_ROOT\"" >> ~/.bash_profile
+echo "export PHASENET_ROOT=\"$PHASENET_ROOT\"" >> ~/.bash_profile
+echo "export PATH=\"$QUICKQUAKE_ROOT:\$PATH\"" >> ~/.bash_profile
+echo "export PYTHONPATH=\"$QUICKQUAKE_ROOT:$PHASENET_ROOT:\$PYTHONPATH\"" >> ~/.bash_profile
 
-if [ -d "$QQ_DIR" ]; then
-  cd "$QQ_DIR"
-  # Safer loop (handles spaces in filenames)
-  find . -maxdepth 1 -name "*.py" -exec chmod a+x {} +
-  cd ..
-else
-  echo "Error: Directory $QQ_DIR not found!"
-  exit 1
-fi
+# 2. Hacer scripts ejecutables
+find "$QUICKQUAKE_ROOT" -name "QQ_*.py" -exec chmod +x {} \;
 
-# -----------------------------------------------
-# 2. Configure PATH in shell profile
-# -----------------------------------------------
-echo "Step 2/3: Configuring system paths..."
-
-# Get current directory using modern syntax
-ROOT_DIR=$(pwd)
-QQ_FULL_PATH="$ROOT_DIR/$QQ_DIR"
-
-# Safe write to profile (creates backup first)
-cp ~/"$PROFILE_FILE" ~/"${PROFILE_FILE}.bak" 2>/dev/null || true
-echo -e "\n# QuickQuake PATH configuration" >> ~/"$PROFILE_FILE"
-echo "export PATH=\"$QQ_FULL_PATH:\$PATH\"" >> ~/"$PROFILE_FILE"
-
-# -----------------------------------------------
-# 3. Final instructions for user
-# -----------------------------------------------
-echo "Step 3/3: Almost done!"
-
-# Detect if running in Conda environment
-if [ -n "$CONDA_PREFIX" ]; then
-  echo -e "\n[IMPORTANT] Detected Anaconda environment:"
-  echo "--------------------------------------------------"
-  echo "Conda environments have isolated PATH settings."
-  echo "To make scripts available in Conda environments:"
-  echo "1. Deactivate current environment: conda deactivate"
-  echo "2. Run: source ~/$PROFILE_FILE"
-  echo "3. Reactivate your environment"
-else
-  echo -e "\nTo complete setup:"
-  echo "source ~/$PROFILE_FILE  # Load new PATH settings"
-  echo "Or simply restart your terminal"
-fi
-
-echo -e "\n[SUCCESS] Setup complete! Test with: QQ_predict.py --help"
+# 3. Mensaje final
+echo "¡Configuración completada! Ejecuta:"
+echo "source ~/.bash_profile"

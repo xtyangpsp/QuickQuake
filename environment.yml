@@ -1,0 +1,24 @@
+name: QuickQuake
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  # Core
+  - python=3.9
+  - numpy=1.23.5          # Versión específica que ya te funciona
+  - tensorflow=2.14.0     # Confirmado en tu PC
+  
+  # PhaseNet
+  - scipy
+  - pandas
+  - obspy
+  - matplotlib
+  - tqdm
+  
+  # Gamma
+  - scikit-learn
+  
+  # QuakeFlow/HypoInverse
+  - cartopy
+  
+

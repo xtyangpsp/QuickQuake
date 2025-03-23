@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-
+import sys
+sys.path.append("/home/elizabeth/soft/src/QuickQuake/dependencies/PhaseNet/phasenet")
 
 #THIS ENTIRE CODE BELONGS TO THE PHASENET AUTHOR. THIS PYTHON FILE IS HERE FOR THE PURPOSE OF MAKING THE DETECTION PROCESS EASIER TO PERFORM.
 

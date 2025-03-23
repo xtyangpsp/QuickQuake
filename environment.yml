@@ -3,22 +3,19 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  # Core
   - python=3.9
-  - numpy=1.23.5          # Versión específica que ya te funciona
-  - tensorflow=2.14.0     # Confirmado en tu PC
-  
-  # PhaseNet
-  - scipy
-  - pandas
-  - obspy
-  - matplotlib
-  - tqdm
-  
-  # Gamma
-  - scikit-learn
-  
-  # QuakeFlow/HypoInverse
-  - cartopy
-  
-
+  - numpy=1.23.5          # Versión compatible con TensorFlow
+  - tensorflow=2.14.0     # CPU o GPU según tu hardware
+  - scikit-learn=1.2.2    # Versión estable para Gamma
+  - pandas=2.0.3
+  - obspy=1.4.0
+  - cartopy=0.21.1        # Para visualización de mapas
+  - mpi4py=3.1.4          # Requerido por HypoInvPy
+  - gfortran              # Compilador para HypoInverse
+  - pip=23.1.2
+  - pip:
+    - hypoinvpy==0.7.0    # Versión estable de HypoInvPy
+    - -e dependencies/PhaseNet  # Instalación editable desde tu repositorio
+    - -e dependencies/GaMMA     # Instalación editable desde tu repositorio
+    - pyproj==3.6.0       # Requerido por cartopy
+    - geographiclib==2.0  # Requerido por cartopy

@@ -8,25 +8,25 @@ from pathlib import Path
 import sys
 
 # =================================================================
-# CONFIGURACIÓN PRINCIPAL - CAMBIA ESTOS VALORES SEGÚN NECESITES
+# ADJUST THESE VALUES AS NEEDED
 # =================================================================
 
-# Configuración de tiempo
+# Time configuration
 START_TIME_STR = "2021-09-25T00:00:00"
 END_TIME_STR = "2021-09-25T06:00:00"
 INCREMENT_HOURS = 2
 
-# --- Configuración de rutas relativas ---
-# Directorio base del proyecto (raíz de QuickQuake)
-BASE_DIR = Path(__file__).parent.parent  # Ajusta según ubicación real de run_all.py
+# --- Relative paths configuration ---
+# Base project directory (root of QuickQuake)
+BASE_DIR = Path(__file__).parent.parent  # Adjust according to the actual location of run_all.py
 
-# Directorios clave
-DATA_ROOT = BASE_DIR / "data"  # Datos sísmicos y resultados
-PHASENET_MODEL = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"  # Modelo PhaseNet
-VMODEL_DIR = BASE_DIR / "quickquake/vmodels"  # Modelos de velocidad para HypoInverse
-HYPO_BIN = BASE_DIR / "dependencies/hyp1.40/src/hyp1.40"  # Binario de HypoInverse (debe estar compilado)
+# Key directories
+DATA_ROOT = BASE_DIR / "data"  # Seismic data and results
+PHASENET_MODEL = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"  # PhaseNet model
+VMODEL_DIR = BASE_DIR / "quickquake/vmodels"  # Velocity models for HypoInverse
+HYPO_BIN = BASE_DIR / "dependencies/hyp1.40/src/hyp1.40"  # HypoInverse binary (must be compiled)
 
-# Scripts (ubicados en quickquake/)
+# Scripts (located in quickquake/)
 SCRIPTS = {
     "generate_config": BASE_DIR / "quickquake/QQ_config.py",
     "download_stations": BASE_DIR / "quickquake/QQ_dl_stations.py",
@@ -36,7 +36,7 @@ SCRIPTS = {
     "localizacion": BASE_DIR / "quickquake/QQ_location.py"
 }
 
-# Flags de control (¡Solo modifica estos True/False!)
+# Control  (only modify these True/False values)
 RUN_GENERATE_CONFIG = True
 RUN_DOWNLOAD = True
 RUN_PHASENET = True
@@ -45,38 +45,38 @@ RUN_LOCATION = True
 MERGE_RESULTS = True
 
 # =================================================================
-# NO MODIFICAR A PARTIR DE AQUÍ
+# DO NOT MODIFY BELOW THIS LINE
 # =================================================================
 
 def create_directory(base_path, date_str):
-    """Crea la estructura de directorios para un intervalo de tiempo."""
+    """Creates the directory structure for a time interval."""
     dir_path = base_path / date_str
     (dir_path / "waveforms").mkdir(parents=True, exist_ok=True)
     return dir_path
 
 def process_interval(start, end, output_dir):
-    """Procesa un intervalo de tiempo."""
-    # Paso 1: Generar configuración
+    """Processes a time interval."""
+    # Step 1: Generate configuration
     config_file = output_dir / "config.json"
     if RUN_GENERATE_CONFIG:
         command = [
-            sys.executable,  # Usa el Python del ambiente actual (QuickQuake)
+            sys.executable,  # Use the Python from the current environment (QuickQuake)
             str(SCRIPTS["generate_config"]),
             "--start", start.isoformat(),
             "--end", end.isoformat(),
             "--output", str(config_file)
         ]
-        print("[+] Ejecutando: Generación de configuración")
+        print("Executing: Configuration generation")
         try:
             subprocess.run(command, check=True)
         except subprocess.CalledProcessError as e:
-            print(f"[!] Error en generación de configuración: {str(e)}")
+            print(f"Error in configuration generation: {str(e)}")
             return False
 
-    # Paso 2: Descargar estaciones
+    # Step 2: Download stations
     stations_file = output_dir / "stations.json"
     if RUN_DOWNLOAD:
-        # Descargar estaciones
+        # Download stations
         command = [
             sys.executable,
             str(SCRIPTS["download_stations"]),
@@ -84,28 +84,28 @@ def process_interval(start, end, output_dir):
             "--output_dir", str(output_dir),
             "--plot"
         ]
-        print("[+] Ejecutando: Descarga de estaciones")
+        print("Executing: Stations download")
         try:
             subprocess.run(command, check=True)
         except subprocess.CalledProcessError as e:
-            print(f"[!] Error en descarga de estaciones: {str(e)}")
+            print(f"Error in stations download: {str(e)}")
             return False
 
-        # Paso 3: Descargar datos sísmicos
+        # Step 3: Download seismic data
         command = [
             sys.executable,
             str(SCRIPTS["data_download"]),
             "--config", str(config_file),
             "--output_dir", str(output_dir)
         ]
-        print("[+] Ejecutando: Descarga de datos sísmicos")
+        print("Executing: Seismic data download")
         try:
             subprocess.run(command, check=True)
         except subprocess.CalledProcessError as e:
-            print(f"[!] Error en descarga de datos: {str(e)}")
+            print(f"Error in seismic data download: {str(e)}")
             return False
 
-    # Paso 4: Ejecutar PhaseNet
+    # Step 4: Execute PhaseNet
     picks_file = output_dir / "picks.csv"
     if RUN_PHASENET:
         command = [
@@ -119,14 +119,14 @@ def process_interval(start, end, output_dir):
             "--format", "mseed_array",
             "--amplitude"
         ]
-        print("[+] Ejecutando: Detección con PhaseNet")
+        print("Executing: PhaseNet detection")
         try:
             subprocess.run(command, check=True)
         except subprocess.CalledProcessError as e:
-            print(f"[!] Error en PhaseNet: {str(e)}")
+            print(f"Error in PhaseNet: {str(e)}")
             return False
 
-    # Paso 5: Asociación Gamma
+    # Step 5: Gamma association
     gamma_file = output_dir / "gamma_catalog.csv"
     if RUN_GAMMA:
         command = [
@@ -137,14 +137,14 @@ def process_interval(start, end, output_dir):
             "--stations", str(stations_file),
             "--output_dir", str(output_dir)
         ]
-        print("[+] Ejecutando: Asociación Gamma")
+        print("Executing: Gamma association")
         try:
             subprocess.run(command, check=True)
         except subprocess.CalledProcessError as e:
-            print(f"[!] Error en Gamma: {str(e)}")
+            print(f"Error in Gamma: {str(e)}")
             return False
 
-    # Paso 6: Localización con HypoInverse
+    # Step 6: Localization with HypoInverse
     if RUN_LOCATION:
         command = [
             sys.executable,
@@ -153,45 +153,45 @@ def process_interval(start, end, output_dir):
             "--vmodel_dir", str(VMODEL_DIR),
             "--hypo_bin", str(HYPO_BIN)
         ]
-        print("[+] Ejecutando: Localización HypoInverse")
+        print("Executing: HypoInverse localization")
         try:
             subprocess.run(command, check=True)
         except subprocess.CalledProcessError as e:
-            print(f"[!] Error en HypoInverse: {str(e)}")
+            print(f"Error in HypoInverse: {str(e)}")
             return False
 
     return True
 
 def merge_hyp_good(data_root, output_filename="consolidated_hyp_good.csv"):
-    """Combina todos los archivos hyp_good.csv en un solo catálogo."""
+    """Combines all hyp_good.csv files into a single catalog."""
     hyp_good_files = list(data_root.glob("**/output/hyp_good.csv"))
     
     if not hyp_good_files:
-        print("[!] No se encontraron archivos hyp_good.csv.")
+        print("No hyp_good.csv files found.")
         return
 
     dfs = []
     for file in hyp_good_files:
         try:
             df = pd.read_csv(file, header=None)
-            print(f"[+] Leyendo: {file}")
+            print(f"Reading: {file}")
             if df.shape[1] >= 5:
                 df = df.iloc[:, :5]
                 df.columns = ["time", "latitude", "longitude", "depth", "magnitude"]
                 dfs.append(df)
             else:
-                print(f"[!] {file} tiene menos de 5 columnas. Omitiendo.")
+                print(f"{file} has less than 5 columns. Skipping.")
         except Exception as e:
-            print(f"[!] Error leyendo {file}: {str(e)}")
+            print(f"Error reading {file}: {str(e)}")
 
     if not dfs:
-        print("[!] No hay datos para unir.")
+        print("No data to merge.")
         return
 
     consolidated_df = pd.concat(dfs, ignore_index=True)
     output_path = data_root / output_filename
     consolidated_df.to_csv(output_path, index=False)
-    print(f"\n[✔] Catálogo consolidado en: {output_path}")
+    print(f"\nCatalog consolidated at: {output_path}")
 
 def main():
     start = datetime.fromisoformat(START_TIME_STR)
@@ -203,18 +203,19 @@ def main():
         date_str = current.strftime("%Y%m%dT%H%M%S")
         output_dir = create_directory(DATA_ROOT, date_str)
         
-        print(f"\n{'='*50}\nProcesando: {current} - {interval_end}\n{'='*50}")
+        print(f"\n{'='*50}\nProcessing: {current} - {interval_end}\n{'='*50}")
         if process_interval(current, interval_end, output_dir):
-            print(f"\n[✔] Proceso exitoso: {output_dir}")
+            print(f"\nProcess successful: {output_dir}")
         else:
-            print(f"\n[✖] Fallo en: {output_dir}")
+            print(f"\nProcess failed: {output_dir}")
         
         current = interval_end
 
     if MERGE_RESULTS:
         print("\n\n" + "="*50)
-        print("Consolidando hyp_good.csv...")
+        print("Merging hyp_good.csv...")
         merge_hyp_good(DATA_ROOT)
 
 if __name__ == "__main__":
     main()
+

@@ -1,42 +1,42 @@
 #!/bin/bash
 
 # =================================================================
-# INSTALACIÓN COMPLETA DE QuickQuake (SIN COMPILACIÓN DE HYPOINVERSE)
+# COMPLETE INSTALLATION OF QuickQuake 
 # =================================================================
 
-# 1. Crear ambiente Conda desde environment.yml
-echo "Creando ambiente QuickQuake..."
+# 1. Create a Conda environment from environment.yml
+echo "Creating QuickQuake environment..."
 conda env create -f environment.yml || {
-    echo "[!] Fallo al crear el ambiente. Verifica environment.yml";
+    echo "failed to create the environment. Check environment.yml";
     exit 1;
 }
 
-# 2. Activar ambiente (versión corregida)
-echo "Activando ambiente..."
+# 2. Activate the environment 
+echo "Activating environment..."
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate QuickQuake || {
-    echo "[!] No se pudo activar el ambiente. ¿Está instalado?";
+    echo "Could not activate the environment. Is it installed?";
     exit 1;
 }
 
-# 3. Instalar paquetes locales en modo editable
-echo "Instalando PhaseNet y Gamma..."
+# 3. Install local packages in editable mode
+echo "Installing PhaseNet and Gamma..."
 pip install -e dependencies/PhaseNet || {
-    echo "[!] Fallo al instalar PhaseNet. Verifica la carpeta dependencies/PhaseNet";
+    echo " Failed to install PhaseNet. Check the dependencies/PhaseNet folder";
     exit 1;
 }
 
 pip install -e dependencies/GaMMA || {
-    echo "[!] Fallo al instalar Gamma. Verifica la carpeta dependencies/GaMMA";
+    echo "Failed to install Gamma. Check the dependencies/GaMMA folder";
     exit 1;
 }
 
-# 4. Dar permisos a los scripts
-echo "Configurando permisos..."
+# 4. Set permissions for scripts
+echo "Setting permissions..."
 chmod +x quickquake/*.py
 
-# 5. Configurar variables de entorno (hipo ya compilado)
-echo "Configurando variables de entorno..."
+# 5. Configure environment variables (hypoinverse should be already compiled)
+echo "Configuring environment variables..."
 cat <<EOT >> ~/.bashrc
 # QuickQuake configuration
 export QUICKQUAKE_ROOT="$(pwd)"
@@ -46,10 +46,11 @@ EOT
 
 source ~/.bashrc
 
-# 6. Verificación final
+# 6. Final verification
 echo ""
 echo "================================================================"
-echo "¡Instalación completada! Verifica con:"
+echo "Installation complete. Verify with:"
 echo "  \$ conda activate QuickQuake"
-echo "  \$ ls -l \$HYPO_BIN  # Debe mostrar el ejecutable (si ya está compilado)"
+echo "  \$ ls -l \$HYPO_BIN  # It should display the executable"
 echo "================================================================"
+

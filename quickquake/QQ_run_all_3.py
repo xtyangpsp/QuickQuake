@@ -13,14 +13,14 @@ import sys
 
 # Time settings
 START = "2021-09-25T00:00:00"
-END = "2021-09-25T06:00:00"
-HOUR_STEP = 2
+END = "2021-09-25T03:00:00"
+HOUR_STEP = 1
 
 # Path setup
 BASE_DIR = Path(__file__).parent.parent
 DATA_ROOT = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"
-VMODELS = BASE_DIR / "quickquake/vmodels"
+VMODELS = BASE_DIR / "vmodels"
 HYPO_BIN = BASE_DIR / "dependencies/hyp1.40/src/hyp1.40"
 
 SCRIPTS = {

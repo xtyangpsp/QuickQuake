@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 
-
 import os
 import glob
 import sys
@@ -12,26 +11,35 @@ from hypoinvpy import utils
 
 def setup_environment(date_dir, vmodel_dir):
     """Prepare the working environment"""
-    # Convert to absolute paths
     date_dir = Path(date_dir).resolve()
     vmodel_dir = Path(vmodel_dir).resolve()
     
-    # Create main directory if it does not exist
     date_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Change to the working directory
     os.chdir(date_dir)
     
-    # Create necessary subdirectories
-    (date_dir/"input").mkdir(exist_ok=True)
-    (date_dir/"output").mkdir(exist_ok=True)
+    input_dir = date_dir/"input"
+    input_dir.mkdir(exist_ok=True)
     
-    # Create symbolic links for velocity models
+    # Limpieza robusta de enlaces/archivos existentes
     for vfile in ['velo_p_eg.cre', 'velo_s_eg.cre']:
-        target = vmodel_dir/vfile
-        link = date_dir/"input"/vfile
-        if link.exists(): link.unlink()
-        link.symlink_to(target)
+        link_path = input_dir/vfile
+        target_path = vmodel_dir/vfile
+        
+        # 1. Eliminar cualquier elemento existente
+        if link_path.exists():
+            if link_path.is_symlink() or link_path.is_file():
+                link_path.unlink(missing_ok=True)
+            elif link_path.is_dir():
+                import shutil
+                shutil.rmtree(link_path)
+        
+        # 2. Verificar que el modelo fuente existe
+        if not target_path.exists():
+            raise FileNotFoundError(f"Modelo de velocidad faltante: {target_path}")
+        
+        # 3. Crear enlace simbólico
+        link_path.symlink_to(target_path)
+        print(f"Enlace creado: {link_path} -> {target_path}")
 
 def main(args):
     try:
@@ -91,4 +99,3 @@ if __name__ == "__main__":
     parser.add_argument('--hypo_bin', required=True)
     args = parser.parse_args()
     main(args)
-

@@ -5,6 +5,11 @@ sys.path.append("/home/elizabeth/soft/src/QuickQuake/dependencies/PhaseNet/phase
 
 #THIS ENTIRE CODE BELONGS TO THE PHASENET AUTHOR. THIS PYTHON FILE IS HERE FOR THE PURPOSE OF MAKING THE DETECTION PROCESS EASIER TO PERFORM.
 
+"""
+This code is based on the "QuakeFlow" repository by Weiqiang Zhu (2021) and is distributed under the MIT License.
+See https://github.com/AI4EPS/QuakeFlow for more details.
+
+"""
 
 
 

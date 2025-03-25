@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
-
-
+"""
+This code is based on the "QuakeFlow" repository by Weiqiang Zhu (2021) 
+See https://github.com/AI4EPS/QuakeFlow for more details.
+This code has been modified 
+"""
 
 import os
 import pandas as pd

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-
+"""
+This code is based on HypoInvPy by xtyangpsp (Xiaotao Yang).
+Original repository: https://github.com/xtyangpsp/HypoInvPy.git
+This code has been modified.
+"""
 import os
 import glob
 import sys

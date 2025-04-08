@@ -13,8 +13,8 @@ import sys
 
 # Time settings
 START = "2021-09-25T00:00:00"
-END = "2021-09-25T03:00:00"
-HOUR_STEP = 1
+END = "2021-09-25T06:00:00"
+HOUR_STEP = 2
 
 # Path setup
 BASE_DIR = Path(__file__).parent.parent

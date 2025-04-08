@@ -4,7 +4,7 @@
   <Sender>IRIS-DMC</Sender>
   <Module>IRIS WEB SERVICE: fdsnws-station | version: 1.1.52</Module>
   <ModuleURI>http://service.iris.edu/fdsnws/station/1/query?starttime=2021-09-25T04%3A00%3A00.000000&amp;endtime=2021-09-25T06%3A00%3A00.000000&amp;network=AV&amp;station=%2A&amp;channel=BHZ%2CBHN%2CBHE%2CSHZ%2CSHN%2CSHE&amp;minlatitude=54.9133&amp;maxlatitude=55.9133&amp;minlongitude=-162.3903&amp;maxlongitude=-161.3903&amp;level=response</ModuleURI>
-  <Created>2025-04-03T14:55:12.466000Z</Created>
+  <Created>2025-04-08T15:49:56.999400Z</Created>
   <Network code="AV" startDate="1988-01-01T00:00:00.000000Z" restrictedStatus="open">
     <Description>Alaska Volcano Observatory (AVO)</Description>
     <Identifier type="DOI">10.7914/SN/AV

@@ -11,13 +11,14 @@ import obspy
 import numpy as np
 import argparse
 
-def set_config(start_time, end_time, config_json,
-               center, deg, networks, channels, client, region):
+def set_config(start_time, end_time, config_json):
+    center = (-161.8903, 55.4133)
+    deg = 1.0
     xlim = [center[0] - deg/2, center[0] + deg/2]
     ylim = [center[1] - deg/2, center[1] + deg/2]
 
     config = {
-        "region": region,
+        "region": "pavlof",
         "center": center,
         "xlim_degree": xlim,
         "ylim_degree": ylim,
@@ -28,9 +29,9 @@ def set_config(start_time, end_time, config_json,
         "degree2km": np.pi * 6371 / 180,
         "starttime": obspy.UTCDateTime(start_time).datetime.isoformat(timespec="milliseconds"),
         "endtime": obspy.UTCDateTime(end_time).datetime.isoformat(timespec="milliseconds"),
-        "networks": networks,
-        "channels": channels,
-        "client": client,
+        "networks": ['AV'],
+        "channels": "BHZ,BHN,BHE,SHZ,SHN,SHE",
+        "client": "IRIS",
         "phasenet": {},
         "gamma": {},
         "hypodd": {"MAXEVENT": 1e4}
@@ -46,20 +47,6 @@ if __name__ == "__main__":
     parser.add_argument("--start", required=True, help="Initial date (e.g., 2021-09-25T00:00:00)")
     parser.add_argument("--end", required=True, help="End date (e.g., 2021-09-26T00:00:00)")
     parser.add_argument("--output", required=True, help="Output config.json path (e.g., data_root/20210925/config.json)")
-    parser.add_argument("--center", required=True, help="Center coordinate as lat,lon (e.g., -161.8903,55.4133)")
-    parser.add_argument("--deg", required=True, type=float, help="Degree span (e.g., 1.0)")
-    parser.add_argument("--networks", required=True, help="Comma separated networks (e.g., AV)")
-    parser.add_argument("--channels", required=True, help="Comma separated channels (e.g., BHZ,BHN,BHE,SHZ,SHN,SHE)")
-    parser.add_argument("--client", required=True, help="Client (e.g., IRIS)")
-    parser.add_argument("--region", required=True, help="Region (e.g., pavlof)")
     args = parser.parse_args()
     
-    # Convertir el string de center a una tupla de floats
-    try:
-        center = tuple(map(float, args.center.split(',')))
-    except Exception as e:
-        raise ValueError("El argumento --center debe tener el formato lat,lon") from e
-
-    networks = args.networks.split(',')
-
-    set_config(args.start, args.end, args.output, center, args.deg, networks, args.channels, args.client, args.region)
+    set_config(args.start, args.end, args.output)

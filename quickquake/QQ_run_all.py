@@ -1,265 +1,147 @@
-#!/usr/bin/env python3
-
-
-
 import os
 import subprocess
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
+import sys
 
 # =================================================================
-# MODIFIABLE CONFIGURATION - ADJUST THESE VALUES
+# CONFIGURATION
 # =================================================================
 
-# Time configuration
-START_TIME_STR = "2021-09-25T00:00:00"
-END_TIME_STR = "2021-09-25T06:00:00"
-INCREMENT_HOURS = 2
+# Time settings
+START = "2021-09-25T00:00:00"
+END = "2021-09-25T06:00:00"
+HOUR_STEP = 2
 
-# Directory configuration
-DATA_ROOT = Path("./data")
-PHASENET_MODEL = "/home/elizabeth/soft/src/phasenet_models/190703-214543/"
-VMODEL_DIR = Path("/home/elizabeth/soft/src/QuickQuake/vmodels")
-HYPO_BIN = "/home/elizabeth/hyp1.40/source/hyp1.40"
+# Path setup
+BASE_DIR = Path(__file__).parent.parent
+DATA_ROOT = BASE_DIR / "data"
+MODEL_DIR = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"
+VMODELS = BASE_DIR / "vmodels"
+HYPO_BIN = BASE_DIR / "dependencies/hyp1.40/src/hyp1.40"
 
-# Conda environments
-CONDA_PATHS = {
-    "quakeflow": "/home/elizabeth/anaconda3/envs/quakeflow/bin/python",
-    "phasenet": "/home/elizabeth/anaconda3/envs/phasenet/bin/python",
-    "hypoinv": "/home/elizabeth/anaconda3/envs/hypoinv/bin/python"
-}
+#configuration setup
+CENTER = (-161.8903, 55.4133)
+DEG = 1.0
+NETWORKS = ['AV']
+CHANNELS = "BHZ,BHN,BHE,SHZ,SHN,SHE"
+CLIENT = "IRIS"
+REGION = "pavlof"
 
-# Scripts
-SCRIPT_DIR_ROOT = Path("/home/elizabeth/soft/my_scripts/My_quakeFlow_1")
+
 SCRIPTS = {
-    "generate_config": SCRIPT_DIR_ROOT/"QQ_config.py",
-    "download_stations": SCRIPT_DIR_ROOT/"QQ_dl_stations.py",
-    "data_download": SCRIPT_DIR_ROOT/"QQ _dl_data.py",
-    "phasenet_predict": SCRIPT_DIR_ROOT/"QQ_predict.py",
-    "gamma_association": SCRIPT_DIR_ROOT/"QQ_gamma.py",
-    "localizacion": SCRIPT_DIR_ROOT/"QQ_ location.py"
+    "config": BASE_DIR / "quickquake/QQ_config.py",
+    "stations": BASE_DIR / "quickquake/QQ_dl_stations.py",
+    "download": BASE_DIR / "quickquake/QQ_dl_data.py",
+    "phasenet": BASE_DIR / "quickquake/QQ_predict.py",
+    "gamma": BASE_DIR / "quickquake/QQ_gamma.py",
+    "location": BASE_DIR / "quickquake/QQ_location.py"
 }
 
-# Control flags (Modify only these True/False values!)
-RUN_GENERATE_CONFIG = True
-RUN_DOWNLOAD = True
+RUN_CONFIG = True
+RUN_DL = True
 RUN_PHASENET = True
 RUN_GAMMA = True
-RUN_LOCATION = True
-MERGE_RESULTS = True 
+RUN_LOC = True
+MERGE = True
 
 # =================================================================
-# DO NOT MODIFY BELOW THIS LINE
+# PROCESSING FUNCTIONS
 # =================================================================
 
-def create_directory(base_path, date_str):
-    """Creates directory structure for a time interval."""
-    dir_path = base_path / date_str
-    (dir_path / "waveforms").mkdir(parents=True, exist_ok=True)
-    return dir_path
-
-def run_step(condition, command, step_name, output_file=None):
-    """Executes a workflow step if the condition is met."""
-    if not condition:
-        print(f"[-] Skipping step: {step_name}")
-        return True
-    
-    if output_file and output_file.exists():
-        print(f"[i] File already exists: {output_file}. Skipping step.")
-        return True
-
+def run_step(cmd, step):
     try:
-        print(f"[+] Running: {step_name}")
-        subprocess.run(command, check=True)
+        subprocess.run(cmd, check=True)
         return True
     except subprocess.CalledProcessError as e:
-        print(f"[!] Error in {step_name}: {str(e)}")
+        print(f"{step} error: {e}")
         return False
-##########
-def process_interval(start, end, output_dir):
-    """Processes a time interval."""
-    # Step 1: Generate configuration
-    config_file = output_dir / "config.json"
+
+def process_window(start, end, out_dir):
+    out_dir.mkdir(parents=True, exist_ok=True)
+    config = out_dir / "config.json"
+    stations = out_dir / "stations.json"
+    picks = out_dir / "picks.csv"
     
+    # Create configuration via subprocess call to QQ_config.py
+    # Se pasan los nuevos argumentos de configuración
+    steps = [
+        (RUN_CONFIG, [sys.executable, str(SCRIPTS["config"]),
+                      "--start", start.isoformat(),
+                      "--end", end.isoformat(),
+                      "--output", str(config),
+                      "--center=" + f"{CENTER[0]},{CENTER[1]}",
+                      "--deg", str(DEG),
+                      "--networks", ",".join(NETWORKS),
+                      "--channels", CHANNELS,
+                      "--client", CLIENT,
+                      "--region", REGION], "Config"),
+        
+        (RUN_DL, [sys.executable, str(SCRIPTS["stations"]),
+                  "--config", str(config), "--output_dir", str(out_dir), "--plot"], "Stations"),
+        
+        (RUN_DL, [sys.executable, str(SCRIPTS["download"]),
+                  "--config", str(config), "--output_dir", str(out_dir)], "Data Download"),
+        
+        (RUN_PHASENET, [sys.executable, str(SCRIPTS["phasenet"]),
+                        "--model", str(MODEL_DIR), "--data_dir", str(out_dir/"waveforms"),
+                        "--data_list", str(out_dir/"input_data.csv"), "--stations", str(stations),
+                        "--result_dir", str(out_dir), "--format", "mseed_array", "--amplitude"], "PhaseNet"),
+        
+        (RUN_GAMMA, [sys.executable, str(SCRIPTS["gamma"]),
+                     "--config", str(config), "--picks", str(picks),
+                     "--stations", str(stations), "--output_dir", str(out_dir)], "Gamma"),
+        
+        (RUN_LOC, [sys.executable, str(SCRIPTS["location"]),
+                   "--date_dir", str(out_dir), "--vmodel_dir", str(VMODELS),
+                   "--hypo_bin", str(HYPO_BIN)], "Location")
+    ]
     
-    if RUN_GENERATE_CONFIG:
-    	command = [
-    			CONDA_PATHS["quakeflow"],
-            str(SCRIPTS["generate_config"]),
-            "--start", start.isoformat(),
-            "--end", end.isoformat(),
-            "--output", str(config_file)
-    		]
-    	step_name = "configuration generation"
- 	print("Running: "+step_name)
-    	subprocess.run(command, check=True)
-    			
-    ##########
-    if not run_step(
-        RUN_GENERATE_CONFIG,
-        [
-            CONDA_PATHS["quakeflow"],
-            str(SCRIPTS["generate_config"]),
-            "--start", start.isoformat(),
-            "--end", end.isoformat(),
-            "--output", str(config_file)
-        ],
-        "Configuration generation",
-        config_file
-    ):
-        return False
-
-    # Step 2: Download stations
-    stations_file = output_dir / "stations.json"
-    if RUN_DOWNLOAD:
-        if not run_step(
-            True,
-            [
-                CONDA_PATHS["quakeflow"],
-                str(SCRIPTS["download_stations"]),
-                "--config", str(config_file),
-                "--output_dir", str(output_dir),
-                "--plot"
-            ],
-            "Download stations",
-            stations_file
-        ):
-            return False
-
-        # Step 3: Download seismic data
-        if not run_step(
-            True,
-            [
-                CONDA_PATHS["quakeflow"],
-                str(SCRIPTS["data_download"]),
-                "--config", str(config_file),
-                "--output_dir", str(output_dir)
-            ],
-            "Seismic data download"
-        ):
-            return False
-
-    # Step 4: Run PhaseNet
-    picks_file = output_dir / "picks.csv"
-    if not run_step(
-        RUN_PHASENET,
-        [
-            CONDA_PATHS["phasenet"],
-            str(SCRIPTS["phasenet_predict"]),
-            "--model", PHASENET_MODEL,
-            "--data_dir", str(output_dir / "waveforms"),
-            "--data_list", str(output_dir / "input_data.csv"),
-            "--stations", str(stations_file),
-            "--result_dir", str(output_dir),
-            "--format", "mseed_array",
-            "--amplitude"
-        ],
-        "Detection with PhaseNet",
-        picks_file
-    ):
-        return False
-
-    # Step 5: Gamma Association
-    gamma_file = output_dir / "gamma_catalog.csv"
-    if not run_step(
-        RUN_GAMMA,
-        [
-            CONDA_PATHS["quakeflow"],
-            str(SCRIPTS["gamma_association"]),
-            "--config", str(config_file),
-            "--picks", str(picks_file),
-            "--stations", str(stations_file),
-            "--output_dir", str(output_dir)
-        ],
-        "Gamma Association",
-        gamma_file
-    ):
-        return False
-
-    # Step 6: Localization
-    if not run_step(
-        RUN_LOCATION,
-        [
-            CONDA_PATHS["hypoinv"],
-            str(SCRIPTS["localizacion"]),
-            "--date_dir", str(output_dir),
-            "--vmodel_dir", str(VMODEL_DIR),
-            "--hypo_bin", HYPO_BIN
-        ],
-        "Hypoinverse Localization"
-    ):
-        return False
-
+    for condition, cmd, name in steps:
+        if condition:
+            print(f"Running: {name}")
+            if not run_step(cmd, name):
+                return False
     return True
 
-def merge_hyp_good(data_root, output_filename="consolidated_hyp_good.csv"):
-    """Une todos los archivos hyp_good.csv de las subcarpetas."""
-    # Busca recursivamente todos los archivos hyp_good.csv
-    hyp_good_files = list(data_root.glob("**/output/hyp_good.csv"))
+def merge_results():
+    files = list(DATA_ROOT.glob("**/output/hyp_good.csv"))
+    if not files: return
     
-    if not hyp_good_files:
-        print("[!] No se encontraron archivos hyp_good.csv para unir.")
-        return
-
-    # Lista para almacenar los DataFrames
     dfs = []
-
-    # Leer y procesar cada archivo
-    for file in hyp_good_files:
+    for f in files:
         try:
-            # Leer el archivo CSV
-            df = pd.read_csv(file, header=None)  # Lee sin encabezado
-            print(f"[+] Archivo leído: {file}")
-
-            # Verificar que el archivo tenga al menos 5 columnas
-            if df.shape[1] >= 5:
-                # Seleccionar solo las primeras 5 columnas
-                df = df.iloc[:, :5]
-                # Asignar nombres a las columnas
-                df.columns = ["time", "latitude", "longitude", "depth", "magnitude"]
-                dfs.append(df)
-            else:
-                print(f"[!] Archivo {file} no tiene suficientes columnas. Se omitirá.")
+            df = pd.read_csv(f, header=None).iloc[:, :5]
+            df.columns = ["time", "lat", "lon", "depth", "mag"]
+            dfs.append(df)
+            print(f"Merging: {f}")
         except Exception as e:
-            print(f"[!] Error al leer {file}: {str(e)}")
+            print(f"Skipped {f}: {e}")
+    
+    if dfs:
+        pd.concat(dfs).to_csv(DATA_ROOT/"consolidated_hyp_good.csv", index=False)
+        print("\nMerged catalog saved")
 
-    # Verificar si hay datos para unir
-    if not dfs:
-        print("[!] No hay datos válidos para unir.")
-        return
-
-    # Concatenar todos los DataFrames verticalmente
-    consolidated_df = pd.concat(dfs, ignore_index=True)
-
-    # Guardar el archivo consolidado
-    output_path = data_root / output_filename
-    consolidated_df.to_csv(output_path, index=False)
-    print(f"\n[✔] Archivo consolidado guardado en: {output_path}")
+# =================================================================
+# MAIN EXECUTION
+# =================================================================
 
 def main():
-    start = datetime.fromisoformat(START_TIME_STR)
-    end = datetime.fromisoformat(END_TIME_STR)
+    current = datetime.fromisoformat(START)
+    end_time = datetime.fromisoformat(END)
     
-    current = start
-    while current < end:
-        interval_end = min(current + timedelta(hours=INCREMENT_HOURS), end)
+    while current < end_time:
+        window_end = min(current + timedelta(hours=HOUR_STEP), end_time)
         date_str = current.strftime("%Y%m%dT%H%M%S")
-        output_dir = create_directory(DATA_ROOT, date_str)
+        output_dir = DATA_ROOT / date_str
         
-        print(f"\n{'='*50}\nProcesando: {current} - {interval_end}\n{'='*50}")
-        if process_interval(current, interval_end, output_dir):
-            print(f"\n[✔] Proceso completado: {output_dir}")
-        else:
-            print(f"\n[✖] Error en: {output_dir}")
-        
-        current = interval_end
+        print(f"\n{'='*50}\nProcessing: {current} - {window_end}\n{'='*50}")
+        if process_window(current, window_end, output_dir):
+            print(f"Completed: {output_dir}")
+        current = window_end
+    
+    if MERGE: merge_results()
 
-    # Etapa adicional: Unir resultados
-    if MERGE_RESULTS:
-        print("\n\n" + "="*50)
-        print("Iniciando consolidación de hyp_good.csv...")
-        merge_hyp_good(DATA_ROOT)
 if __name__ == "__main__":
     main()
-    

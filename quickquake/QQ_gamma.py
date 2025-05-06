@@ -57,7 +57,7 @@ def main():
     
     # Critical missing parameter in last association script version
     if config["method"] == "BGMM":
-        config["oversample_factor"] = 4
+        config["oversample_factor"] = 10
     elif config["method"] == "GMM":
         config["oversample_factor"] = 1
 
@@ -72,9 +72,11 @@ def main():
         (0, config["z(km)"][1] + 1),
         (None, None),
     )
-    config["dbscan_eps"] = 10
+    config["dbscan_eps"] = 15
     config["dbscan_min_samples"] = 3
     config["min_picks_per_eq"] = 3
+    config["min_p_picks_per_eq"] = 0#new code form git hub example 
+    config["min_s_picks_per_eq"] = 0#new code form git hub example 
     config["max_sigma11"] = 2.0
     config["max_sigma22"] = 2.0
     config["max_sigma12"] = 1.0

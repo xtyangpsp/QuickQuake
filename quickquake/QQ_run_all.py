@@ -40,8 +40,8 @@ SCRIPTS = {
 }
 
 RUN_CONFIG = True
-RUN_DL = True
-RUN_PHASENET = True
+RUN_DL =    True
+RUN_PHASENET =  True
 RUN_GAMMA = True
 RUN_LOC = True
 MERGE = True

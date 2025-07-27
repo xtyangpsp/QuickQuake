@@ -70,7 +70,8 @@ def main(args):
             min_nsta = 4,
             lat_code = 'N',
             lon_code = 'W',
-            ztrlist = np.arange(0, 20, 1),
+            #ref_ele = -1.0,
+            ztrlist = np.arange(0, 20, 0.1),
             hypoinv_bin = args.hypo_bin
         )
 

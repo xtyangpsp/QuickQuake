@@ -73,8 +73,8 @@ def main():
         (None, None),
     )
     config["dbscan_eps"] = 15
-    config["dbscan_min_samples"] = 3
-    config["min_picks_per_eq"] = 3
+    config["dbscan_min_samples"] = 4
+    config["min_picks_per_eq"] = 4
     config["min_p_picks_per_eq"] = 0#new code form git hub example 
     config["min_s_picks_per_eq"] = 0#new code form git hub example 
     config["max_sigma11"] = 2.0

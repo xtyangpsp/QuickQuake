@@ -1,2 +1,0 @@
-time,magnitude,longitude,latitude,depth(m),sigma_time,sigma_amp,cov_time_amp,gamma_score,event_index
-2021-09-25T01:39:28.855,1.550,-162.006,55.247,61000.000,0.067,0.103,0.004,3.000,1

@@ -10,9 +10,9 @@ import sys
 # =================================================================
 
 # Time settings
-START = "2021-09-25T00:00:00"
-END = "2021-09-25T06:00:00"
-HOUR_STEP = 2
+START = "2021-09-19T15:00:00"
+END = "2021-09-19T20:00:00"
+HOUR_STEP = 5
 
 # Path setup
 BASE_DIR = Path(__file__).parent.parent
@@ -39,12 +39,12 @@ SCRIPTS = {
     "location": BASE_DIR / "quickquake/QQ_location.py"
 }
 
-RUN_CONFIG = True
-RUN_DL =    True
+RUN_CONFIG = False
+RUN_DL =  False
 RUN_PHASENET =  True
 RUN_GAMMA = True
-RUN_LOC = True
-MERGE = True
+RUN_LOC =       True
+MERGE =     True
 
 # =================================================================
 # PROCESSING FUNCTIONS

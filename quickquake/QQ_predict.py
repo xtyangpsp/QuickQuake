@@ -42,6 +42,12 @@ tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
 
 
 def read_args():
+    """Parse command-line arguments for PhaseNet prediction.
+
+    Returns:
+        argparse.Namespace: All runtime options such as model/data paths,
+        thresholds, batch size, output settings, and I/O formats.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch_size", default=20, type=int, help="batch size")
     parser.add_argument("--model_dir", help="Checkpoint directory (default: None)")
@@ -73,6 +79,26 @@ def read_args():
 
 
 def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
+    """Run inference over a dataset and export picks/results.
+
+    Steps:
+    - Prepare output folders for logs, figures, and probabilities
+    - Build a tf.data input pipeline from the provided data_reader
+    - Restore the latest checkpoint from ``args.model_dir``
+    - Iterate batches to compute probability maps and extract P/S picks
+    - Optionally plot waveforms and save probability arrays to HDF5
+    - Write a CSV of detected picks to ``args.result_dir``
+
+    Args:
+        args: Parsed CLI args.
+        data_reader: Data provider that exposes ``dataset(batch_size)`` and shapes.
+        figure_dir: Optional override for figure output directory.
+        prob_dir: Optional override for probability output directory.
+        log_dir: Optional override for log directory.
+
+    Returns:
+        int: 0 on success.
+    """
     current_time = time.strftime("%y%m%d-%H%M%S")
     if log_dir is None:
         log_dir = os.path.join(args.log_dir, "pred", current_time)
@@ -92,8 +118,10 @@ def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
     logging.info("Pred log: %s" % log_dir)
     logging.info("Dataset size: {}".format(data_reader.num_data))
 
+    # Build the input pipeline that yields batches for prediction.
     with tf.compat.v1.name_scope("Input_Batch"):
         if args.format == "mseed_array":
+            # mseed_array format currently expects single examples per step.
             batch_size = 1
         else:
             batch_size = args.batch_size
@@ -106,6 +134,7 @@ def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
 
     model = UNet(config=config, input_batch=batch, mode="pred")
     # model = UNet(config=config, mode="pred")
+    # Configure TF to grow GPU memory as needed to avoid pre-allocation.
     sess_config = tf.compat.v1.ConfigProto()
     sess_config.gpu_options.allow_growth = True
     # sess_config.log_device_placement = False
@@ -115,6 +144,7 @@ def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
         init = tf.compat.v1.global_variables_initializer()
         sess.run(init)
 
+        # Restore from the most recent checkpoint under model_dir.
         latest_check_point = tf.train.latest_checkpoint(args.model_dir)
         logging.info(f"restoring model {latest_check_point}")
         saver.restore(sess, latest_check_point)
@@ -125,6 +155,7 @@ def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
             multiprocessing.set_start_method("spawn")
             pool = multiprocessing.Pool(multiprocessing.cpu_count())
 
+        # Iterate over the dataset in batches and run inference.
         for _ in tqdm(range(0, data_reader.num_data, batch_size), desc="Pred"):
             if args.amplitude:
                 pred_batch, X_batch, amp_batch, fname_batch, t0_batch, station_batch = sess.run(
@@ -147,6 +178,7 @@ def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
             if args.amplitude:
                 waveforms = amp_batch
 
+            # Convert probability maps into discrete picks (P/S) per trace.
             picks_ = extract_picks(
                 preds=pred_batch,
                 file_names=fname_batch,
@@ -186,6 +218,7 @@ def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
             #     )
 
             if args.plot_figure:
+                # Normalize file names for plotting; inputs may arrive as bytes.
                 if not (isinstance(fname_batch, np.ndarray) or isinstance(fname_batch, list)):
                     fname_batch = [fname_batch.decode().rstrip(".mseed") + "_" + x.decode() for x in station_batch]
                 else:
@@ -201,6 +234,7 @@ def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
 
             if args.save_prob:
                 # save_prob(pred_batch, fname_batch, prob_dir=prob_dir)
+                # Normalize file names before writing to HDF5 group.
                 if not (isinstance(fname_batch, np.ndarray) or isinstance(fname_batch, list)):
                     fname_batch = [fname_batch.decode().rstrip(".mseed") + "_" + x.decode() for x in station_batch]
                 else:
@@ -217,6 +251,7 @@ def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
             # df["prob"] = df["phase_prob"]
             # df["type"] = df["phase_type"]
 
+            # Limit output CSV to a consistent set of columns.
             base_columns = [
                 "station_id",
                 "begin_time",
@@ -243,9 +278,11 @@ def pred_fn(args, data_reader, figure_dir=None, prob_dir=None, log_dir=None):
 
 
 def main(args):
+    """Configure data input and launch prediction pipeline."""
     logging.basicConfig(format="%(asctime)s %(message)s", level=logging.INFO)
 
     with tf.compat.v1.name_scope("create_inputs"):
+        # Choose the appropriate reader for the specified format.
         if args.format == "mseed_array":
             data_reader = DataReader_mseed_array(
                 data_dir=args.data_dir,

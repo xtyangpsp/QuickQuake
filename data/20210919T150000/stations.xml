@@ -3,8 +3,8 @@
   <Source>IRIS-DMC</Source>
   <Sender>IRIS-DMC</Sender>
   <Module>IRIS WEB SERVICE: fdsnws-station | version: 1.1.52</Module>
-  <ModuleURI>http://service.iris.edu/fdsnws/station/1/query?starttime=2021-09-19T15%3A00%3A00.000000&amp;endtime=2021-09-19T20%3A00%3A00.000000&amp;network=AV&amp;station=%2A&amp;channel=BHZ%2CBHN%2CBHE%2CSHZ%2CSHN%2CSHE&amp;minlatitude=54.9133&amp;maxlatitude=55.9133&amp;minlongitude=-162.3903&amp;maxlongitude=-161.3903&amp;level=response</ModuleURI>
-  <Created>2025-07-27T18:43:54.847200Z</Created>
+  <ModuleURI>http://service.iris.edu/fdsnws/station/1/query?starttime=2021-09-19T15%3A00%3A00.000000&amp;endtime=2021-09-19T16%3A00%3A00.000000&amp;network=AV&amp;station=%2A&amp;channel=BHZ%2CBHN%2CBHE%2CSHZ%2CSHN%2CSHE&amp;minlatitude=54.9133&amp;maxlatitude=55.9133&amp;minlongitude=-162.3903&amp;maxlongitude=-161.3903&amp;level=response</ModuleURI>
+  <Created>2025-11-24T22:22:35.521400Z</Created>
   <Network code="AV" startDate="1988-01-01T00:00:00.000000Z" restrictedStatus="open">
     <Description>Alaska Volcano Observatory (AVO)</Description>
     <Identifier type="DOI">10.7914/SN/AV
@@ -10000,8 +10000,8 @@
         </DataLogger>
         <Response>
           <InstrumentSensitivity>
-            <Value>1351019986.1591313</Value>
-            <Frequency>2.0</Frequency>
+            <Value>1695638129.9831645</Value>
+            <Frequency>5.0</Frequency>
             <InputUnits>
               <Name>m/s</Name>
               <Description>Velocity in meters per second</Description>
@@ -10023,8 +10023,8 @@
                 <Description>Voltage in Volts</Description>
               </OutputUnits>
               <PzTransferFunctionType>LAPLACE (RADIANS/SECOND)</PzTransferFunctionType>
-              <NormalizationFactor>1.2094184287254661</NormalizationFactor>
-              <NormalizationFrequency unit="HERTZ">2.0</NormalizationFrequency>
+              <NormalizationFactor>0.9693181644293057</NormalizationFactor>
+              <NormalizationFrequency unit="HERTZ">5.0</NormalizationFrequency>
               <Zero number="0">
                 <Real minusError="0.0" plusError="0.0">0.0</Real>
                 <Imaginary minusError="0.0" plusError="0.0">0.0</Imaginary>
@@ -10216,8 +10216,8 @@
         </DataLogger>
         <Response>
           <InstrumentSensitivity>
-            <Value>1351019986.1591313</Value>
-            <Frequency>2.0</Frequency>
+            <Value>1695638129.9831645</Value>
+            <Frequency>5.0</Frequency>
             <InputUnits>
               <Name>m/s</Name>
               <Description>Velocity in meters per second</Description>
@@ -10239,8 +10239,8 @@
                 <Description>Voltage in Volts</Description>
               </OutputUnits>
               <PzTransferFunctionType>LAPLACE (RADIANS/SECOND)</PzTransferFunctionType>
-              <NormalizationFactor>1.2094184287254661</NormalizationFactor>
-              <NormalizationFrequency unit="HERTZ">2.0</NormalizationFrequency>
+              <NormalizationFactor>0.9693181644293057</NormalizationFactor>
+              <NormalizationFrequency unit="HERTZ">5.0</NormalizationFrequency>
               <Zero number="0">
                 <Real minusError="0.0" plusError="0.0">0.0</Real>
                 <Imaginary minusError="0.0" plusError="0.0">0.0</Imaginary>
@@ -10432,8 +10432,8 @@
         </DataLogger>
         <Response>
           <InstrumentSensitivity>
-            <Value>1351019986.1591313</Value>
-            <Frequency>2.0</Frequency>
+            <Value>1695638129.9831645</Value>
+            <Frequency>5.0</Frequency>
             <InputUnits>
               <Name>m/s</Name>
               <Description>Velocity in meters per second</Description>
@@ -10455,8 +10455,8 @@
                 <Description>Voltage in Volts</Description>
               </OutputUnits>
               <PzTransferFunctionType>LAPLACE (RADIANS/SECOND)</PzTransferFunctionType>
-              <NormalizationFactor>1.2094184287254661</NormalizationFactor>
-              <NormalizationFrequency unit="HERTZ">2.0</NormalizationFrequency>
+              <NormalizationFactor>0.9693181644293057</NormalizationFactor>
+              <NormalizationFrequency unit="HERTZ">5.0</NormalizationFrequency>
               <Zero number="0">
                 <Real minusError="0.0" plusError="0.0">0.0</Real>
                 <Imaginary minusError="0.0" plusError="0.0">0.0</Imaginary>
@@ -13687,7 +13687,7 @@
         </DataLogger>
         <Response>
           <InstrumentSensitivity>
-            <Value>1359010910.2469418</Value>
+            <Value>1695638129.9831645</Value>
             <Frequency>5.0</Frequency>
             <InputUnits>
               <Name>m/s</Name>
@@ -13731,7 +13731,7 @@
             </PolesZeros>
             <StageGain>
               <Value>107.0</Value>
-              <Frequency>5.0</Frequency>
+              <Frequency>2.0</Frequency>
             </StageGain>
           </Stage>
           <Stage number="2">
@@ -13903,7 +13903,7 @@
         </DataLogger>
         <Response>
           <InstrumentSensitivity>
-            <Value>1359010910.2469418</Value>
+            <Value>1695638129.9831645</Value>
             <Frequency>5.0</Frequency>
             <InputUnits>
               <Name>m/s</Name>
@@ -13947,7 +13947,7 @@
             </PolesZeros>
             <StageGain>
               <Value>107.0</Value>
-              <Frequency>5.0</Frequency>
+              <Frequency>2.0</Frequency>
             </StageGain>
           </Stage>
           <Stage number="2">
@@ -14119,7 +14119,7 @@
         </DataLogger>
         <Response>
           <InstrumentSensitivity>
-            <Value>1359010910.2469418</Value>
+            <Value>1695638129.9831645</Value>
             <Frequency>5.0</Frequency>
             <InputUnits>
               <Name>m/s</Name>
@@ -14163,7 +14163,7 @@
             </PolesZeros>
             <StageGain>
               <Value>107.0</Value>
-              <Frequency>5.0</Frequency>
+              <Frequency>2.0</Frequency>
             </StageGain>
           </Stage>
           <Stage number="2">

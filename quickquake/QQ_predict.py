@@ -49,7 +49,7 @@ def read_args():
         thresholds, batch size, output settings, and I/O formats.
     """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch_size", default=5, type=int, help="batch size")
+    parser.add_argument("--batch_size", default=20, type=int, help="batch size")
     parser.add_argument("--model_dir", help="Checkpoint directory (default: None)")
     parser.add_argument("--data_dir", default="", help="Input file directory")
     parser.add_argument("--data_list", default="", help="Input csv file")
@@ -59,7 +59,11 @@ def read_args():
     parser.add_argument("--result_fname", default="picks", help="Output file")
     parser.add_argument("--min_p_prob", default=0.3, type=float, help="Probability threshold for P pick")
     parser.add_argument("--min_s_prob", default=0.3, type=float, help="Probability threshold for S pick")
+<<<<<<< HEAD
     parser.add_argument("--mpd", default=30, type=float, help="Minimum peak distance")
+=======
+    parser.add_argument("--mpd", default=20, type=float, help="Minimum peak distance")
+>>>>>>> d0097252597dc666031340b9b1b998a4c1869501
     parser.add_argument("--amplitude", action="store_true", help="if return amplitude value")
     parser.add_argument("--format", default="numpy", help="input format")
     parser.add_argument("--s3_url", default="localhost:9000", help="s3 url")

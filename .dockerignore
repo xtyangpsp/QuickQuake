@@ -1,0 +1,14 @@
+.git
+data
+vmodels
+figs
+test_figures
+__pycache__
+*.pyc
+*.pyo
+*.mseed
+*.log
+*.csv
+*.pkl
+*.npz
+*.npy

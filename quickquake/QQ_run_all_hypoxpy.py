@@ -47,7 +47,7 @@ RUN_DL = False
 RUN_PHASENET =  False
 RUN_GAMMA = False
 
-# Merge oficial (TU merge)
+# Merge oficial (TU merge) oj
 RUN_MERGE_GAMMA = False
 
 # NUEVO: Localización / relocalización (HypoXPy)

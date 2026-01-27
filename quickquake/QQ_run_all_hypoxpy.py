@@ -1,8 +1,18 @@
+#!/usr/bin/env python3
+"""
+QuickQuake: run pipeline in time chunks (Config -> Stations -> Download -> PhaseNet -> GaMMA),
+then merge ALL GaMMA outputs into data/merged/, and finally prepare ONE global station list
+for HypoXPy in data/merged/input/GAMMA_station_list.json.
+
+Optionally: run HypoXPy (HypoInverse + HypoDD) as a final relocation step.
+"""
+
 import subprocess
 import pandas as pd
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
+import shutil
 
 # =================================================================
 # CONFIGURATION
@@ -12,13 +22,13 @@ START = "2021-09-19T15:00:00"
 END = "2021-09-19T17:00:00"
 HOUR_STEP = 1
 
-BASE_DIR = Path(__file__).parent.parent
+BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_ROOT = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"
 
 CENTER = (-161.8903, 55.4133)
 DEG = 1.0
-NETWORKS = ['AV']
+NETWORKS = ["AV"]
 CHANNELS = "BHZ,BHN,BHE,SHZ,SHN,SHE"
 CLIENT = "IRIS"
 REGION = "pavlof"
@@ -29,24 +39,33 @@ SCRIPTS = {
     "download": BASE_DIR / "quickquake/QQ_dl_data.py",
     "phasenet": BASE_DIR / "quickquake/QQ_predict.py",
     "gamma": BASE_DIR / "quickquake/QQ_gamma.py",
-    # "location": BASE_DIR / "quickquake/QQ_location.py"  # ya no se usa aquí
+    "location": BASE_DIR / "quickquake/QQ_location_hypoxpy.py",  # <-- NUEVO
 }
 
-RUN_CONFIG = True
-RUN_DL = True
-RUN_PHASENET = True
-RUN_GAMMA = True
+RUN_CONFIG = False
+RUN_DL = False
+RUN_PHASENET =  False
+RUN_GAMMA = False
 
-# Nuevo: merge oficial (TU merge)
-RUN_MERGE_GAMMA = True
+# Merge oficial (TU merge)
+RUN_MERGE_GAMMA = False
+
+# NUEVO: Localización / relocalización (HypoXPy)
+RUN_LOCATION = True
+LOCATION_BINPATH = "/home/elizabeth/bin"  # <-- AJUSTA si cambia
+LOCATION_NAMEBASE = "GAMMA"
+# Ejemplos opcionales:
+# LOCATION_EXTRA_ARGS = ["--cleanup"]
+LOCATION_EXTRA_ARGS = []
+
 
 # =================================================================
 # HELPERS
 # =================================================================
 
-def run_step(cmd, step):
+def run_step(cmd, step, cwd=None):
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, cwd=cwd)
         return True
     except subprocess.CalledProcessError as e:
         print(f"{step} error: {e}")
@@ -102,7 +121,7 @@ def process_window(start, end, out_dir):
     for condition, cmd, name in steps:
         if condition:
             print(f"Running: {name}")
-            if not run_step(cmd, name):
+            if not run_step(cmd, name, cwd=BASE_DIR):
                 return False
 
     return True
@@ -190,19 +209,79 @@ def merge_gamma_catalog_with_event_id(base_dir: Path, out_dir: Path) -> Path:
     return out_path
 
 
-def run_merge_block():
+def run_merge_block(first_chunk_dir: Path):
     """
-    Corre el merge oficial de GaMMA y guarda en data/_MERGED/
+    Corre el merge oficial de GaMMA y prepara data/merged/input para HypoXPy.
     """
-    out_dir = DATA_ROOT / "merged"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    merged_dir = DATA_ROOT / "merged"
+    merged_dir.mkdir(parents=True, exist_ok=True)
 
-    picks_out = merge_gamma_picks_with_event_id(DATA_ROOT, out_dir)
-    catalog_out = merge_gamma_catalog_with_event_id(DATA_ROOT, out_dir)
+    # 1) Merge oficial (tus CSV con event_id)
+    picks_out = merge_gamma_picks_with_event_id(DATA_ROOT, merged_dir)
+    catalog_out = merge_gamma_catalog_with_event_id(DATA_ROOT, merged_dir)
 
-    print("\nMerge terminado.")
-    print(f" - Picks  : {picks_out}")
-    print(f" - Catalog: {catalog_out}")
+    # 2) Crear carpetas para HypoXPy dentro de merged/
+    indir = merged_dir / "input"
+    outdir = merged_dir / "output"
+    indir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
+
+    # 3) Copiar station list (primer chunk REAL de este run)
+    src_station = first_chunk_dir / "stations.json"
+    if not src_station.exists():
+        raise FileNotFoundError(f"No existe stations.json en el primer chunk del run: {src_station}")
+
+    dst_station = indir / "GAMMA_station_list.json"
+    shutil.copy2(src_station, dst_station)
+
+    print("\n✅ Merge terminado (sin renombrar CSV).")
+    print(f" - Picks merged  : {picks_out}")
+    print(f" - Catalog merged: {catalog_out}")
+    print(f" - Station list  : {dst_station}")
+    print(f" - HypoXPy work dirs: {indir}  |  {outdir}")
+
+
+# =================================================================
+# NUEVO: RUN LOCATION BLOCK (HYPoxPY)
+# =================================================================
+
+def run_location_block():
+    """
+    Llama QQ_location_hypoxpy.py como subproceso.
+    Depende de que el merge ya haya generado:
+      data/merged/gammacatalog_id.csv
+      data/merged/gammapicks_id.csv
+      data/merged/input/GAMMA_station_list.json
+    """
+    merged_dir = DATA_ROOT / "merged"
+
+    required = [
+        merged_dir / "gammacatalog_id.csv",
+        merged_dir / "gammapicks_id.csv",
+        merged_dir / "input" / f"{LOCATION_NAMEBASE}_station_list.json",
+    ]
+    missing = [p for p in required if not p.exists()]
+    if missing:
+        raise FileNotFoundError(
+            "Faltan inputs para HypoXPy. No puedo correr localización.\n"
+            + "\n".join([f" - {p}" for p in missing])
+        )
+
+    cmd = [
+        sys.executable,
+        str(SCRIPTS["location"]),
+        "--binpath", str(LOCATION_BINPATH),
+        "--namebase", str(LOCATION_NAMEBASE),
+    ] + list(LOCATION_EXTRA_ARGS)
+
+    print("\n" + "=" * 50)
+    print("Running: HypoXPy relocation (HypoInverse + HypoDD)")
+    print("CMD:", " ".join(cmd))
+    print("=" * 50 + "\n")
+
+    ok = run_step(cmd, "HypoXPy relocation", cwd=BASE_DIR)
+    if not ok:
+        raise RuntimeError("Falló el step de HypoXPy relocation.")
 
 
 # =================================================================
@@ -213,22 +292,33 @@ def main():
     current = datetime.fromisoformat(START)
     end_time = datetime.fromisoformat(END)
 
+    first_chunk_dir = None  # primer chunk exitoso del run
+
     while current < end_time:
         window_end = min(current + timedelta(hours=HOUR_STEP), end_time)
         date_str = current.strftime("%Y%m%dT%H%M%S")
         output_dir = DATA_ROOT / date_str
 
         print(f"\n{'='*50}\nProcessing: {current} - {window_end}\n{'='*50}")
-        if process_window(current, window_end, output_dir):
+
+        ok = process_window(current, window_end, output_dir)
+        if ok:
             print(f"Completed: {output_dir}")
+            if first_chunk_dir is None:
+                first_chunk_dir = output_dir
 
         current = window_end
 
-    # FUERA DEL LOOP: merge oficial (TU merge)
+    # Merge oficial
     if RUN_MERGE_GAMMA:
-        run_merge_block()
+        if first_chunk_dir is None:
+            raise RuntimeError("No hubo ningún chunk exitoso; no puedo hacer merge ni copiar stations.json.")
+        run_merge_block(first_chunk_dir)
 
-    # Próximo paso (después): aquí vendrá HypoXPy relocate() usando esos 2 CSV
+    # NUEVO: HypoXPy relocation
+    if RUN_LOCATION:
+        run_location_block()
+
 
 if __name__ == "__main__":
     main()

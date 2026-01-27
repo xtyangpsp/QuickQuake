@@ -37,7 +37,7 @@ def set_config(start_time, end_time, config_json,
     }
 
     with open(config_json, 'w') as fp:
-        json.dump(config, fp, indent=2)
+        json.dump(config, fp, indent=2) ## This JSON serves as the central input for the entire QuickQuake pipeline.
     
     print(f"Configuration saved to {config_json}")
 
@@ -61,5 +61,6 @@ if __name__ == "__main__":
         raise ValueError("El argumento --center debe tener el formato lat,lon") from e
 
     networks = args.networks.split(',')
+# This section runs the configuration step and writes config.json.
 
     set_config(args.start, args.end, args.output, center, args.deg, networks, args.channels, args.client, args.region)

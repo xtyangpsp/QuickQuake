@@ -10,6 +10,101 @@
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal"
-        }
-    ]
-}
+        },
+        
+              {
+                "name": "QQ_run_all (1h, full pipeline)",
+                "type": "debugpy",
+                "request": "launch",
+                "program": "${workspaceFolder}/quickquake/QQ_run_all.py",
+                "console": "integratedTerminal"
+              },
+              {
+                "name": "QQ_config (20210919T150000)",
+                "type": "debugpy",
+                "request": "launch",
+                "program": "${workspaceFolder}/quickquake/QQ_config.py",
+                "console": "integratedTerminal",
+                "args": [
+                  "--start", "2021-09-19T15:00:00",
+                  "--end", "2021-09-19T16:00:00",
+                  "--output", "${workspaceFolder}/data/20210919T150000/config.json",
+                  "--center=-161.8903,55.4133",
+                  "--deg", "1.0",
+                  "--networks", "AV",
+                  "--channels", "BHZ,BHN,BHE,SHZ,SHN,SHE",
+                  "--client", "IRIS",
+                  "--region", "pavlof"
+                ]
+              },
+              {
+                "name": "QQ_dl_stations (20210919T150000)",
+                "type": "debugpy",
+                "request": "launch",
+                "program": "${workspaceFolder}/quickquake/QQ_dl_stations.py",
+                "console": "integratedTerminal",
+                "args": [
+                  "--config", "${workspaceFolder}/data/20210919T150000/config.json",
+                  "--output_dir", "${workspaceFolder}/data/20210919T150000",
+                  "--plot"
+                ]
+              },
+              {
+                "name": "QQ_dl_data (20210919T150000)",
+                "type": "debugpy",
+                "request": "launch",
+                "program": "${workspaceFolder}/quickquake/QQ_dl_data.py",
+                "console": "integratedTerminal",
+                "args": [
+                  "--config", "${workspaceFolder}/data/20210919T150000/config.json",
+                  "--output_dir", "${workspaceFolder}/data/20210919T150000"
+                ]
+              },
+              {
+                "name": "QQ_predict PhaseNet (20210919T150000)",
+                "type": "debugpy",
+                "request": "launch",
+                "program": "${workspaceFolder}/quickquake/QQ_predict.py",
+                "console": "integratedTerminal",
+                "args": [
+                  "--model", "${workspaceFolder}/dependencies/PhaseNet/model/190703-214543",
+                  "--data_dir", "${workspaceFolder}/data/20210919T150000/waveforms",
+                  "--data_list", "${workspaceFolder}/data/20210919T150000/input_data.csv",
+                  "--stations", "${workspaceFolder}/data/20210919T150000/stations.json",
+                  "--result_dir", "${workspaceFolder}/data/20210919T150000",
+                  "--format", "mseed_array",
+                  "--amplitude"
+                ]
+              },
+              {
+                "name": "QQ_gamma (20210919T150000)",
+                "type": "debugpy",
+                "request": "launch",
+                "program": "${workspaceFolder}/quickquake/QQ_gamma.py",
+                "console": "integratedTerminal",
+                "args": [
+                  "--config", "${workspaceFolder}/data/20210919T150000/config.json",
+                  "--picks", "${workspaceFolder}/data/20210919T150000/picks.csv",
+                  "--stations", "${workspaceFolder}/data/20210919T150000/stations.json",
+                  "--output_dir", "${workspaceFolder}/data/20210919T150000"
+                ]
+              },
+              {
+                "name": "QQ_location (20210919T150000)",
+                "type": "debugpy",
+                "request": "launch",
+                "program": "${workspaceFolder}/quickquake/QQ_location.py",
+                "console": "integratedTerminal",
+                "args": [
+                  "--date_dir", "${workspaceFolder}/data/20210919T150000",
+                  "--vmodel_dir", "${workspaceFolder}/vmodels",
+                  "--hypo_bin", "${workspaceFolder}/dependencies/hyp1.40/src/hyp1.40"
+                ]
+              }
+            ]
+          }
+          
+
+
+
+      

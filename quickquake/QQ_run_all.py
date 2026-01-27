@@ -11,7 +11,7 @@ import sys
 #verbosing
 # Time settings
 START = "2021-09-19T15:00:00"
-END = "2021-09-19T18:00:00"
+END = "2021-09-19T16:00:00"
 HOUR_STEP = 1
 
 # Path setup

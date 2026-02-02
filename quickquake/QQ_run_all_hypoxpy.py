@@ -15,9 +15,9 @@ import sys
 # CONFIGURATION
 # =================================================================
 
-START = "2021-09-19T15:00:00"
-END   = "2021-09-19T17:00:00"
-HOUR_STEP = 1
+START = "2021-07-29T08:00:00"
+END   = "2021-07-30T00:00:00"
+HOUR_STEP = 8
 
 BASE_DIR  = Path(__file__).resolve().parent.parent
 DATA_ROOT = BASE_DIR / "data"
@@ -40,19 +40,34 @@ SCRIPTS = {
     # NUEVOS: llamados como subprocess
     "merge":    BASE_DIR / "quickquake/QQ_merge_gamma_outputs.py",
     "location": BASE_DIR / "quickquake/QQ_location_hypoxpy.py",
+    "qc_velocity": BASE_DIR / "quickquake/QQ_qc_velocity.py",
+
 }
 
-RUN_CONFIG   = False
-RUN_DL       = False
-RUN_PHASENET = False
-RUN_GAMMA    = False
+RUN_CONFIG   = True
+RUN_DL       =  True
+RUN_PHASENET = True
+RUN_GAMMA    = True
 
-RUN_MERGE_GAMMA = False
+RUN_MERGE_GAMMA = True
 
 RUN_LOCATION     = True
 LOCATION_BINPATH = "/home/elizabeth/bin"  # ajusta si cambia
 LOCATION_NAMEBASE = "GAMMA"
 LOCATION_EXTRA_ARGS = []  # ej: ["--cleanup"]
+RUN_QC_VELOCITY = True
+
+QC_PRE_S  = 10.0
+QC_POST_S = 40.0
+QC_FREQMIN = 1.0
+QC_FREQMAX = 5.0
+QC_VMIN = 2.0
+QC_VMAX = 8.0
+QC_VSTEPS = 100
+QC_WINLEN = 1.0
+
+QC_MAKE_PLOT = False   # por defecto OFF para producción
+QC_MAX_EVENTS = 0      # 0 = todos (para test pon 50)
 
 
 # =================================================================
@@ -163,6 +178,32 @@ def main():
             "--namebase", str(LOCATION_NAMEBASE),
         ] + list(LOCATION_EXTRA_ARGS)
         run_step(cmd_loc, "HypoXPy relocation (HypoInverse + HypoDD)", cwd=BASE_DIR)
+    # 4) QC velocity (as subprocess)
+    if RUN_QC_VELOCITY:
+        cmd_qc = [
+            sys.executable, str(SCRIPTS["qc_velocity"]),
+            "--data_root", str(DATA_ROOT),
+            "--namebase", str(LOCATION_NAMEBASE),
+
+            "--pre_s", str(QC_PRE_S),
+            "--post_s", str(QC_POST_S),
+            "--freqmin", str(QC_FREQMIN),
+            "--freqmax", str(QC_FREQMAX),
+
+            "--vmin", str(QC_VMIN),
+            "--vmax", str(QC_VMAX),
+            "--vsteps", str(QC_VSTEPS),
+
+            "--winlen", str(QC_WINLEN),
+
+            "--max_events", str(QC_MAX_EVENTS),
+        ]
+        if QC_MAKE_PLOT:
+            cmd_qc.append("--make_plot")
+
+        run_step(cmd_qc, "QC: 1D velocity energy curve", cwd=BASE_DIR)
+
+    
 
 
 if __name__ == "__main__":

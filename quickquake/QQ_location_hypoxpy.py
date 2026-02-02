@@ -5,13 +5,13 @@ QuickQuake - HypoXPy relocation (HypoInverse + HypoDD) ONCE using merged GaMMA o
 Expected filesystem after QQ_run_all_hypoxpy.py:
 - <repo>/data/merged/gammacatalog_id.csv
 - <repo>/data/merged/gammapicks_id.csv
-- <repo>/data/merged/input/GAMMA_station_list.json   (copiado desde el primer chunk del run)
+- <repo>/data/merged/input/GAMMA_station_list.json  (join from all)
 
 This script will:
 - Create/ensure:
     <repo>/data/merged/input/
     <repo>/data/merged/output/
-- Create symlinks (or copies if symlink fails) inside input/ with the canonical names expected by HypoXPy:
+- Create symlinks inside input/ with the canonical names expected by HypoXPy:
     input/GAMMA_catalog.csv  -> ../gammacatalog_id.csv
     input/GAMMA_picks.csv    -> ../gammapicks_id.csv
 - Link/copy velocity models + templates from <repo>/hypox_templates into input/
@@ -31,9 +31,9 @@ import numpy as np
 from hypoxpy.workflow import relocate
 
 
-# -----------------------------
+# 
 # helpers
-# -----------------------------
+# 
 def link_or_copy(src: Path, dst: Path):
     """
     Prefer symlink to avoid duplication; fallback to copy (better for systems without symlink perms).
@@ -235,7 +235,7 @@ def main():
         verbose=True,
     )
 
-    print("\n✅ Relocation terminado.")
+    print("\n Relocation terminado.")
     print(f"   Working dir : {merged_dir}")
     print(f"   Input dir   : {indir}")
     print(f"   Output dir  : {outdir}")

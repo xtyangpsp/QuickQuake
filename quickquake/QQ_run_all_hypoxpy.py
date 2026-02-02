@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-QuickQuake: run pipeline in time chunks (Config -> Stations -> Download -> PhaseNet -> GaMMA),
-then run a separate merge script, then (optionally) run HypoXPy relocation.
+QuickQuake: run pipeline in time chunks Config > Stations > Download > PhaseNet > GaMMA,
+then run a separate merge script, then optionally run HypoXPy relocation, quality control and classification of volcanic signals 
 
-This file is an ORCHESTRATOR only: it should not contain merge/location logic.
+This file is an ORCHESTRATOR only
 """
 
 import subprocess
@@ -11,9 +11,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 
-# =================================================================
+# 
 # CONFIGURATION
-# =================================================================
+# 
 
 START = "2021-07-29T08:00:00"
 END   = "2021-07-30T00:00:00"
@@ -36,8 +36,6 @@ SCRIPTS = {
     "download": BASE_DIR / "quickquake/QQ_dl_data.py",
     "phasenet": BASE_DIR / "quickquake/QQ_predict.py",
     "gamma":    BASE_DIR / "quickquake/QQ_gamma.py",
-
-    # NUEVOS: llamados como subprocess
     "merge":    BASE_DIR / "quickquake/QQ_merge_gamma_outputs.py",
     "location": BASE_DIR / "quickquake/QQ_location_hypoxpy.py",
     "qc_velocity": BASE_DIR / "quickquake/QQ_qc_velocity.py",
@@ -52,11 +50,11 @@ RUN_GAMMA    = True
 RUN_MERGE_GAMMA = True
 
 RUN_LOCATION     = True
-LOCATION_BINPATH = "/home/elizabeth/bin"  # ajusta si cambia
+LOCATION_BINPATH = "/home/elizabeth/bin"  # 
 LOCATION_NAMEBASE = "GAMMA"
 LOCATION_EXTRA_ARGS = []  # ej: ["--cleanup"]
-RUN_QC_VELOCITY = True
 
+RUN_QC_VELOCITY = True
 QC_PRE_S  = 10.0
 QC_POST_S = 40.0
 QC_FREQMIN = 1.0
@@ -66,13 +64,13 @@ QC_VMAX = 8.0
 QC_VSTEPS = 100
 QC_WINLEN = 1.0
 
-QC_MAKE_PLOT = False   # por defecto OFF para producción
-QC_MAX_EVENTS = 0      # 0 = todos (para test pon 50)
+QC_MAKE_PLOT = False   # 
+QC_MAX_EVENTS = 0      # 
 
 
-# =================================================================
+# 
 # HELPERS
-# =================================================================
+#
 
 def run_step(cmd, step, cwd=None):
     print("\n" + "=" * 70)
@@ -143,9 +141,9 @@ def process_window(start, end, out_dir: Path):
             run_step(cmd, name, cwd=BASE_DIR)
 
 
-# =================================================================
+# 
 # MAIN
-# =================================================================
+# 
 
 def main():
     current  = datetime.fromisoformat(START)
@@ -178,6 +176,7 @@ def main():
             "--namebase", str(LOCATION_NAMEBASE),
         ] + list(LOCATION_EXTRA_ARGS)
         run_step(cmd_loc, "HypoXPy relocation (HypoInverse + HypoDD)", cwd=BASE_DIR)
+        
     # 4) QC velocity (as subprocess)
     if RUN_QC_VELOCITY:
         cmd_qc = [

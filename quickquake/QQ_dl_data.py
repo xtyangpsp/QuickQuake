@@ -13,12 +13,20 @@ import obspy
 from obspy.clients.fdsn import Client
 
 def download_waveforms(config_json, output_dir):
-    client = Client("IRIS")
+    # INPUT 1: config.json 
+    with open(config_json) as fp:
+        config = json.load(fp)
+
+    # Usa el client definido en config.json (que viene del orquestador).
+    # Si falta la clave "client", cae a IRIS.
+    client_name = config.get("client", "IRIS")
+    client = Client(client_name)
+    print(f"[waveforms] FDSN client = {client_name}")
+
+    # OUTPUT DIR: waveforms/ (creado aquí; PhaseNet lo usa después como --data_dir)
     waveform_dir = os.path.join(output_dir, "waveforms")
     os.makedirs(waveform_dir, exist_ok=True)
 
-    with open(config_json) as fp:
-        config = json.load(fp)
     with open(os.path.join(output_dir, "stations.pkl"), "rb") as fp:
         stations = pickle.load(fp)
 

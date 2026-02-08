@@ -24,7 +24,7 @@ JSONStructure = Union[JSONArray, JSONObject]
 
 app = FastAPI()
 X_SHAPE = [3000, 1, 3]
-SAMPLING_RATE = 50
+SAMPLING_RATE = 100
 
 # load model
 model = UNet(mode="pred")

@@ -38,7 +38,7 @@ def read_args():
     parser.add_argument("--result_fname", default="picks", help="Output file")
     parser.add_argument("--min_p_prob", default=0.3, type=float, help="Probability threshold for P pick")
     parser.add_argument("--min_s_prob", default=0.3, type=float, help="Probability threshold for S pick")
-    parser.add_argument("--mpd", default=50, type=float, help="Minimum peak distance")
+    parser.add_argument("--mpd", default=100, type=float, help="Minimum peak distance")
     parser.add_argument("--amplitude", action="store_true", help="if return amplitude value")
     parser.add_argument("--format", default="numpy", help="input format")
     parser.add_argument("--s3_url", default="localhost:9000", help="s3 url")

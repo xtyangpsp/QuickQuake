@@ -42,8 +42,8 @@ SCRIPTS = {
 
 }
 
-RUN_CONFIG   = True
-RUN_DL       =  True
+RUN_CONFIG   = False
+RUN_DL       =  False
 RUN_PHASENET = True
 RUN_GAMMA    = True
 

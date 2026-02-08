@@ -59,7 +59,7 @@ def read_args():
     parser.add_argument("--result_fname", default="picks", help="Output file")
     parser.add_argument("--min_p_prob", default=0.5, type=float, help="Probability threshold for P pick")
     parser.add_argument("--min_s_prob", default=0.5, type=float, help="Probability threshold for S pick")
-    parser.add_argument("--mpd", default=50, type=float, help="Minimum peak distance")
+    parser.add_argument("--mpd", default=20, type=float, help="Minimum peak distance")
     parser.add_argument("--amplitude", action="store_true", help="if return amplitude value")
     parser.add_argument("--format", default="numpy", help="input format")
     parser.add_argument("--s3_url", default="localhost:9000", help="s3 url")
@@ -69,7 +69,7 @@ def read_args():
     parser.add_argument("--pre_sec", default=1, type=float, help="Window length before pick")
     parser.add_argument("--post_sec", default=4, type=float, help="Window length after pick")
 
-    parser.add_argument("--highpass_filter", default=0 , type=float, help="Highpass filter")
+    parser.add_argument("--highpass_filter", default=0.0 , type=float, help="Highpass filter")
     parser.add_argument("--response_xml", default=None, type=str, help="response xml file")
 
     parser.add_argument("--sampling_rate", default=100, type=float, help="sampling rate")

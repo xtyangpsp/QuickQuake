@@ -93,12 +93,12 @@ def normalize_catalog(catalog: pd.DataFrame, catc: CatalogCols = CatalogCols()) 
     _require_cols(df, [catc.time, catc.lat, catc.lon], name="catalog")
 
     df = _coerce_utc(df, catc.time)
-    # fuerza event_id a entero nullable (para comparar bien)
+    # Force event_id to nullable integer (for consistent comparisons)
     if catc.event_id in df.columns:
         df[catc.event_id] = pd.to_numeric(df[catc.event_id], errors="coerce").astype("Int64")
 
 
-    # depth default
+    # Default depth
     if catc.depth_km not in df.columns:
         df[catc.depth_km] = 0.0
 
@@ -115,7 +115,7 @@ def normalize_picks(picks: pd.DataFrame, pkc: PicksCols = PicksCols()) -> pd.Dat
 
     df = _coerce_utc(df, pkc.time)
 
-    # fuerza ids de evento a entero nullable (event_id / event_id_mapped)
+    # Force event id columns to nullable integer (event_id / event_id_mapped)
     for c in [pkc.event_id, pkc.event_id_mapped]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce").astype("Int64")
@@ -131,7 +131,7 @@ def normalize_picks(picks: pd.DataFrame, pkc: PicksCols = PicksCols()) -> pd.Dat
 
 def load_stations_json(stations_json: Path) -> pd.DataFrame:
     """
-    Returns stations with canonical columns: id, lat, lon, elev_km
+    Return stations with canonical columns: id, lat, lon, elev_km
     """
     station_df = pd.read_json(stations_json).T
     station_df.index.name = "id"
@@ -273,7 +273,7 @@ def get_trimmed_stream(cache: StreamCache, t_start: UTCDateTime, t_end: UTCDateT
 
 
 # =========================
-# PICKS: MEJOR FILTRO (EVENT_ID > VENTANA)
+# PICKS: BEST FILTER (EVENT_ID OR TIME WINDOW)
 # =========================
 
 def picks_for_event(row_event: pd.Series, picks: pd.DataFrame,
@@ -290,12 +290,12 @@ def picks_for_event(row_event: pd.Series, picks: pd.DataFrame,
         ev_id = row_event[catc.event_id]
 
         if pd.notna(ev_id):
-            # 1) intenta primero event_id_mapped (tu caso real)
+            # 1) Try event_id_mapped first
             pw_by = pd.DataFrame()
             if pkc.event_id_mapped in pw.columns:
                 pw_by = pw[pw[pkc.event_id_mapped] == ev_id]
 
-            # 2) si no hubo match, intenta event_id normal
+            # 2) If no match, try event_id
             if pw_by.empty and (pkc.event_id in pw.columns):
                 pw_by = pw[pw[pkc.event_id] == ev_id]
 
@@ -303,7 +303,7 @@ def picks_for_event(row_event: pd.Series, picks: pd.DataFrame,
                 pw = pw_by
                 used_id_match = True
 
-    # 3) si no se pudo por ID, cae a ventana temporal
+    # 3) If no id match, fall back to time window
     if not used_id_match:
         pw = pw[(pw[pkc.time] >= pd.Timestamp(t_start.datetime, tz="UTC")) &
                 (pw[pkc.time] <= pd.Timestamp(t_end.datetime,   tz="UTC"))]
@@ -322,7 +322,7 @@ def add_mpl_xnum(pw: pd.DataFrame, time_col: str = "timestamp") -> pd.DataFrame:
 
 
 # =========================
-# DISTANCIAS
+# DISTANCES
 # =========================
 
 def stations_by_hypo_distance_km(stations: pd.DataFrame, ev_lat: float, ev_lon: float, ev_depth_km: float,
@@ -351,7 +351,7 @@ def stations_by_hypo_distance_km(stations: pd.DataFrame, ev_lat: float, ev_lon: 
 
 
 # =========================
-# TRAZA: ENERGÍA
+# TRACE: ENERGY
 # =========================
 
 def window_l2_energy(trace: obspy.Trace, t_abs: UTCDateTime, win_len: float) -> float:
@@ -365,7 +365,7 @@ def window_l2_energy(trace: obspy.Trace, t_abs: UTCDateTime, win_len: float) -> 
 def _select_vertical_trace_for_sid(st, sid: str):
     """
     sid: 'NET.STA.LOC.PREFIX'  e.g. 'AV.DT1..BH'
-    Returns (trace_copy, chosen_channel) or (None, None)
+    Return (trace_copy, chosen_channel) or (None, None)
     """
     parts = sid.split(".")
     if len(parts) < 4:
@@ -373,7 +373,7 @@ def _select_vertical_trace_for_sid(st, sid: str):
 
     net, sta, loc, chprefix = parts[0], parts[1], parts[2], parts[3]
 
-    # 1) intenta exactamente el prefijo (BH -> BHZ)
+    # 1) Try exact prefix (BH -> BHZ)
     candidates = [f"{chprefix}Z", "BHZ", "EHZ", "SHZ", "HHZ"]
 
     for ch in candidates:
@@ -381,12 +381,12 @@ def _select_vertical_trace_for_sid(st, sid: str):
         if len(tr) > 0:
             return tr[0].copy(), tr[0].stats.channel
 
-    # 2) cualquier canal vertical
+    # 2) Any vertical channel
     tr = st.select(network=net, station=sta, location=loc, channel="*Z")
     if len(tr) > 0:
         return tr[0].copy(), tr[0].stats.channel
 
-    # 3) cualquier canal del prefijo (BH*)
+    # 3) Any channel with the prefix (BH*)
     tr = st.select(network=net, station=sta, location=loc, channel=f"{chprefix}*")
     if len(tr) > 0:
         return tr[0].copy(), tr[0].stats.channel
@@ -400,16 +400,16 @@ def plot_event_moveout_picks_only(
     stations: pd.DataFrame,
     cache: "StreamCache",
     wf_index: "WaveformIndex",
-    # ventana
+    # window
     pre_s: float = 10.0,
     post_s: float = 30.0,
     min_prob: Optional[float] = None,
-    # filtro
+    # filter
     freqmin: Optional[float] = None,
     freqmax: Optional[float] = None,
     corners: int = 4,
     zerophase: bool = True,
-    # estilo picks
+    # pick style
     p_style: str = "vline",     # "vline" | "marker"
     s_style: str = "vline",
     p_color: str = "black",
@@ -425,7 +425,7 @@ def plot_event_moveout_picks_only(
     figsize: Tuple[float, float] = (10, 6),
 ):
     """
-    Moveout (wiggles + picks) SOLO con estaciones que tienen picks para ese evento.
+    Moveout (wiggles + picks) using only stations that have picks for this event.
     X = UTC time (matplotlib datenums), Y = hypocentral distance (km).
     """
     import matplotlib.pyplot as plt
@@ -435,7 +435,7 @@ def plot_event_moveout_picks_only(
     catc = CatalogCols()
     pkc = PicksCols()
 
-    # -------- evento y ventana --------
+    # -------- event and window --------
     t0 = UTCDateTime(row_event[catc.time].to_pydatetime())
     t_start = t0 - float(pre_s)
     t_end   = t0 + float(post_s)
@@ -444,7 +444,7 @@ def plot_event_moveout_picks_only(
     ev_lon = float(row_event[catc.lon])
     ev_depth_km = float(row_event.get(catc.depth_km, 0.0))
 
-    # -------- picks del evento (ID-mapped first) --------
+    # -------- event picks (id-mapped first) --------
     pw = picks_for_event(
         row_event=row_event,
         picks=picks,
@@ -459,10 +459,10 @@ def plot_event_moveout_picks_only(
         print("[moveout] No picks for this event/window.")
         return None, None, {"files": [], "stations_used": []}
 
-    # -------- SOLO estaciones con picks --------
+    # -------- only stations with picks --------
     stations_with_picks = sorted(pw[pkc.station_id].dropna().unique().tolist())
 
-    # -------- distancias --------
+    # -------- distances --------
     order_all, dist_map_all, _ = stations_by_hypo_distance_km(
         stations=stations,
         ev_lat=ev_lat,
@@ -471,22 +471,22 @@ def plot_event_moveout_picks_only(
         stc=StationCols(),
     )
 
-    # quedarnos con las estaciones con picks y con distancia disponible
+    # Keep stations with picks and valid distance
     stations_with_picks = [sid for sid in stations_with_picks if sid in dist_map_all]
     if not stations_with_picks:
         print("[moveout] Picks exist, but none of their station ids are in dist_map.")
         return None, None, {"files": [], "stations_used": []}
 
-    # ordena por distancia (near->far)
+    # Sort by distance (near -> far)
     picked_ids = sorted(stations_with_picks, key=lambda sid: dist_map_all.get(sid, np.inf))
 
-    # -------- waveforms (nuevo sistema) --------
+    # -------- waveforms (index + cache) --------
     st, files = get_trimmed_stream(cache, t_start, t_end, wf_index, pad_neighbors=1)
     if st is None or len(st) == 0:
         print("[moveout] No waveforms in window.")
         return None, None, {"files": [str(f) for f in files], "stations_used": []}
 
-    # -------- prepara x-axis base --------
+    # -------- base x-axis --------
     t0_num = mdates.date2num(t0.datetime.replace(tzinfo=None))
 
     # -------- helper: prep trace -> (d_norm, x_abs) --------
@@ -521,7 +521,7 @@ def plot_event_moveout_picks_only(
         x = t0_num + tf.times(reftime=t0) / 86400.0
         return d, x
 
-    # -------- escala de wiggles basada en estaciones con picks --------
+    # -------- wiggle scale based on station spacing --------
     dvals = np.array([dist_map_all[sid] for sid in picked_ids], dtype=float)
     spac = np.diff(dvals)
     spac = spac[spac > 0]
@@ -534,11 +534,11 @@ def plot_event_moveout_picks_only(
     # -------- plot --------
     fig, ax = plt.subplots(figsize=figsize)
 
-    # cache para ubicar markers en wiggle
+    # Cache for marker placement on wiggles
     wig_cache = {}   # sid -> (x_arr, d_arr, y0)
     used_y = []
 
-    # dibuja SOLO estaciones con picks
+    # Plot only stations with picks
     for sid in picked_ids:
         tr, chosen_ch = _select_vertical_trace_for_sid(st, sid)
         if tr is None:
@@ -557,16 +557,16 @@ def plot_event_moveout_picks_only(
         print("[moveout] No usable traces for stations-with-picks (nothing plotted).")
         return None, None, {"files": [str(f) for f in files], "stations_used": []}
 
-    # -------- filtra picks a SOLO estaciones que realmente se plotearon --------
+    # -------- keep picks only for plotted stations --------
     pw = pw[pw[pkc.station_id].isin(wig_cache.keys())].copy()
     if pw.empty:
         print("[moveout] Waveforms plotted, but no picks belong to those plotted stations.")
-        # aún así mostramos wiggles
+        # Wiggles can still be shown
     else:
         
         pw = add_mpl_xnum(pw, time_col=pkc.time)
 
-    # -------- helper para marker sobre wiggle --------
+    # -------- helper for marker on wiggle --------
     def samp_on_wiggle(sid, xval):
         if sid not in wig_cache:
             return None
@@ -575,7 +575,7 @@ def plot_event_moveout_picks_only(
             return None
         return y0 + amp_km * np.interp(xval, x_arr, d_arr)
 
-    # -------- dibuja picks --------
+    # -------- draw picks --------
     def draw_phase(phase_letter: str, style: str, color: str):
         if pw.empty:
             return
@@ -618,16 +618,16 @@ def plot_event_moveout_picks_only(
     draw_phase("P", p_style, p_color)
     draw_phase("S", s_style, s_color)
 
-    # -------- decoraciones --------
+    # -------- formatting --------
     ax.set_ylim(min(used_y) - ypad, max(used_y) + ypad)
     ax.axvline(t0_num, ls="--", lw=0.8)
 
     ax.set_ylabel("Distance (km)")
     ax.set_xlabel("UTC time")
 
-    # título
+    # Title
     eid = row_event.get(catc.event_id, "")
-    ax.set_title(f"Moveout (picks-only) | event_id={eid} | {row_event[catc.time]}")
+    ax.set_title(f"Moveout | event_id={eid} | {row_event[catc.time]}")
 
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S", tz=timezone.utc))
     ax.xaxis.set_major_locator(mdates.AutoDateLocator())
@@ -645,7 +645,7 @@ def plot_event_moveout_picks_only(
 
     return fig, ax, {"files": [str(f) for f in files], "stations_used": list(wig_cache.keys())}
 
-#SPECTROGRAMS 
+# SPECTROGRAMS
 
 
 def plot_event_spectrograms_vertical_picks_only(
@@ -654,16 +654,16 @@ def plot_event_spectrograms_vertical_picks_only(
     stations: pd.DataFrame,
     cache: "StreamCache",
     wf_index: "WaveformIndex",
-    # ventana alrededor del origin time
+    # window around origin time
     pre_s: float = 30.0,
     post_s: float = 90.0,
     min_prob: Optional[float] = None,
-    # STFT / espectrograma
+    # STFT / spectrogram
     window_s: float = 2.0,
     overlap_frac: float = 0.8,
     freq_min: float = 0.0,
     freq_max: float = 20.0,
-    # filtro opcional (si lo quieres también para el tr)
+    # optional filter (also applied to the trace)
     bp_freqmin: Optional[float] = None,
     bp_freqmax: Optional[float] = None,
     corners: int = 4,
@@ -672,7 +672,7 @@ def plot_event_spectrograms_vertical_picks_only(
     db_pmin: float = 5.0,
     db_pmax: float = 98.0,
     global_clim: bool = True,
-    # estética
+    # style
     time_color: str = "navy",
     p_color: str = "black",
     s_color: str = "red",
@@ -685,15 +685,15 @@ def plot_event_spectrograms_vertical_picks_only(
     figsize: Optional[Tuple[float, float]] = None,
 ):
     """
-    Figura por evento:
-      - filas: estaciones con picks (detectaron el evento), ordenadas por distancia hipocentral (near->far)
-      - col 0: traza Z (tiempo)
-      - col 1: espectrograma Z (STFT)
+    One figure per event:
+      - rows: stations with picks (for this event), sorted by hypocentral distance (near -> far)
+      - col 0: Z trace (time)
+      - col 1: Z spectrogram (STFT)
     """
     import matplotlib.pyplot as plt
     import matplotlib.dates as mdates
 
-    # SciPy (preferido). Fallback si no existe.
+    # SciPy (preferred). Fallback if not available.
     try:
         from scipy.signal import spectrogram as scipy_spectrogram
         _HAS_SCIPY = True
@@ -703,7 +703,7 @@ def plot_event_spectrograms_vertical_picks_only(
     catc = CatalogCols()
     pkc = PicksCols()
 
-    # --- evento y ventana ---
+    # --- event and window ---
     t0 = UTCDateTime(row_event[catc.time].to_pydatetime())
     t_start = t0 - float(pre_s)
     t_end   = t0 + float(post_s)
@@ -714,7 +714,7 @@ def plot_event_spectrograms_vertical_picks_only(
     ev_depth_km = float(row_event.get(catc.depth_km, 0.0))
     eid = row_event.get(catc.event_id, "")
 
-    # --- picks del evento (ID-mapped primero) ---
+    # --- event picks (id-mapped first) ---
     pw = picks_for_event(
         row_event=row_event,
         picks=picks,
@@ -729,10 +729,10 @@ def plot_event_spectrograms_vertical_picks_only(
         print("[spec] No picks for this event/window.")
         return None, None, {"files": [], "stations_used": []}
 
-    # --- estaciones con picks ---
+    # --- stations with picks ---
     stations_with_picks = sorted(pw[pkc.station_id].dropna().unique().tolist())
 
-    # --- distancias (para orden near->far) ---
+    # --- distances (to sort near -> far) ---
     _, dist_map_all, _ = stations_by_hypo_distance_km(
         stations=stations,
         ev_lat=ev_lat,
@@ -749,14 +749,14 @@ def plot_event_spectrograms_vertical_picks_only(
     picked_ids = sorted(stations_with_picks, key=lambda sid: dist_map_all.get(sid, np.inf))
     nsta = len(picked_ids)
 
-    # --- waveforms (nuevo sistema index+cache) ---
+    # --- waveforms (index + cache) ---
     st, files = get_trimmed_stream(cache, t_start, t_end, wf_index, pad_neighbors=1)
     if st is None or len(st) == 0:
         print("[spec] No waveforms in window.")
-        # igual hacemos figura “no data” por estación
+        # Still build a "no data" figure
         st = None
 
-    # --- prepara picks para dibujar líneas (P/S) ---
+    # --- prepare picks for drawing P/S lines ---
     pw = pw.copy()
     pw = pw[pw[pkc.station_id].isin(picked_ids)]
     if not pw.empty:
@@ -764,7 +764,7 @@ def plot_event_spectrograms_vertical_picks_only(
 
     # --- layout ---
     if figsize is None:
-        # altura por estación: ~2.3" (ajusta si quieres)
+        # Height per station: ~2.3"
         figsize = (14.0, max(3.0, 2.3 * nsta))
 
     fig, axes = plt.subplots(
@@ -774,9 +774,9 @@ def plot_event_spectrograms_vertical_picks_only(
         gridspec_kw={"wspace": 0.15, "hspace": 0.25},
     )
     if nsta == 1:
-        axes = np.array([axes])  # fuerza shape (1,2)
+        axes = np.array([axes])  # force shape (1,2)
 
-    # --- helper: prepara traza (detrend/taper + filtro opcional) ---
+    # --- helper: prep trace (detrend/taper + optional filter) ---
     def prep_trace_for_plot(tr):
         tf = tr.copy()
         tf.detrend("demean")
@@ -797,8 +797,8 @@ def plot_event_spectrograms_vertical_picks_only(
                 )
         return tf
 
-    # --- 1) precomputar espectrogramas para global clim (si aplica) ---
-    spec_store = {}  # sid -> dict con arrays para plot
+    # --- 1) precompute spectrograms (for global clim) ---
+    spec_store = {}  # sid -> dict for plotting
     all_db_vals = []
 
     for sid in picked_ids:
@@ -835,7 +835,7 @@ def plot_event_spectrograms_vertical_picks_only(
                 mode="psd",
             )
         else:
-            # fallback simple con matplotlib.specgram (menos control, pero funciona)
+            # Simple fallback using matplotlib.specgram
             Pxx, f, t_seg, _ = axes[0, 1].specgram(
                 tf.data.astype(float),
                 NFFT=nperseg,
@@ -844,9 +844,8 @@ def plot_event_spectrograms_vertical_picks_only(
                 scale="dB",
                 mode="psd",
             )
-            # specgram ya devuelve dB en la imagen; aquí reconstruimos “como si” fuera Sxx_dB
+            # specgram returns dB in the plotted image; keep it as "Sxx_dB"
             Sxx = Pxx
-            # convertimos a "Sxx_dB" ya calculado
             Sxx_dB = Sxx
             seg_times = [tf.stats.starttime + tt for tt in t_seg]
             seg_dates = mdates.date2num([stt.datetime.replace(tzinfo=None) for stt in seg_times])
@@ -879,7 +878,7 @@ def plot_event_spectrograms_vertical_picks_only(
         }
         all_db_vals.append(Sxx_dB[np.isfinite(Sxx_dB)].ravel())
 
-    # clim global (opcional)
+    # Global clim (optional)
     vmin = vmax = None
     if global_clim:
         vals = np.concatenate(all_db_vals) if len(all_db_vals) else np.array([])
@@ -887,7 +886,7 @@ def plot_event_spectrograms_vertical_picks_only(
             vmin = float(np.percentile(vals, db_pmin))
             vmax = float(np.percentile(vals, db_pmax))
 
-    # --- 2) plot por estación (filas) ---
+    # --- 2) plot each station (rows) ---
     stations_used = []
     last_im = None
 
@@ -897,7 +896,7 @@ def plot_event_spectrograms_vertical_picks_only(
 
         dist_km = float(dist_map_all.get(sid, np.nan))
 
-        # picks de esta estación
+        # Picks for this station
         pw_sid = pw[pw[pkc.station_id] == sid] if (pw is not None and not pw.empty) else pd.DataFrame()
 
         info = spec_store.get(sid, {"status": "no_data"})
@@ -923,7 +922,7 @@ def plot_event_spectrograms_vertical_picks_only(
         ax_time.plot(times, tf.data.astype(float), linewidth=0.8, color=time_color)
         ax_time.axvline(t0_num, color=origin_color, linestyle=origin_ls, linewidth=1.1, alpha=0.85)
 
-        # picks P/S como líneas
+        # P/S picks as lines
         if not pw_sid.empty:
             for _, rr in pw_sid.iterrows():
                 ph = str(rr[pkc.phase]).upper()
@@ -939,7 +938,7 @@ def plot_event_spectrograms_vertical_picks_only(
             ax_time.set_xlabel("Time (UTC)")
 
         # --- SPECTROGRAM ---
-        # pcolormesh directo; shading auto evita pelear con bins manuales
+        # Use pcolormesh; shading="auto" avoids manual bin issues
         im = ax_spec.pcolormesh(
             seg_dates,
             f,
@@ -953,7 +952,7 @@ def plot_event_spectrograms_vertical_picks_only(
 
         ax_spec.axvline(t0_num, color=origin_color, linestyle=origin_ls, linewidth=1.1, alpha=0.85)
 
-        # picks P/S también en spectrogram
+        # P/S picks on spectrogram
         if not pw_sid.empty:
             for _, rr in pw_sid.iterrows():
                 ph = str(rr[pkc.phase]).upper()
@@ -968,7 +967,7 @@ def plot_event_spectrograms_vertical_picks_only(
             ax_spec.set_xlabel("Time (UTC)")
         ax_spec.set_ylabel("Freq [Hz]")
 
-    # --- formato x global ---
+    # --- global x formatting ---
     date_format = mdates.DateFormatter("%H:%M:%S")
     locator = mdates.AutoDateLocator(minticks=3, maxticks=6)
 
@@ -978,21 +977,21 @@ def plot_event_spectrograms_vertical_picks_only(
             axes[r, c].xaxis.set_major_formatter(date_format)
             axes[r, c].tick_params(axis="x", labelrotation=25)
 
-    # --- labels comunes ---
+    # --- common labels ---
     axes[0, 0].set_ylabel("Amplitude")
     axes[0, 1].set_title("Spectrogram (Z)", fontsize=11)
 
     fig.suptitle(
-        f"Event spectrograms (picks-only, vertical Z) | event_id={eid} | {row_event[catc.time]} | window=[-{pre_s}s, +{post_s}s]",
+        f"Event spectrograms, vertical Z) | event_id={eid} | {row_event[catc.time]} | window=[-{pre_s}s, +{post_s}s]",
         fontsize=12,
         y=0.995,
     )
 
-    # colorbar (una sola para toda la figura)
-    # --- antes de colorbar: reserva espacio a la derecha ---
-    fig.tight_layout(rect=[0, 0, 0.90, 0.98])  # deja 10% libre a la derecha
+    # One colorbar for the full figure
+    # Reserve space on the right
+    fig.tight_layout(rect=[0, 0, 0.90, 0.98])
 
-    # --- colorbar finita con eje dedicado (SOLO UNA) ---
+    # Add a dedicated axis for the colorbar (single colorbar)
     if last_im is not None:
         cax = fig.add_axes([0.92, 0.12, 0.012, 0.76])  # [left, bottom, width, height]
         cbar = fig.colorbar(last_im, cax=cax)
@@ -1013,40 +1012,40 @@ def plot_event_spectrograms_vertical_picks_only(
     return fig, axes, meta
 
 
-#SEISMICITY 3D
+# SEISMICITY 3D
 
 def plot_catalog_3d_topo_seismicity(
     catalog: pd.DataFrame,
     *,
     catc: CatalogCols = CatalogCols(),
     mode: str = "time",              # "time" | "year_month"
-    year: Optional[int] = None,      # requerido si mode="year_month"
+    year: Optional[int] = None,      # required if mode="year_month"
     dem_res: str = "15s",
     topo_exagg: float = 5.0,
     topo_opacity: float = 0.98,
     colorscale: str = "Spectral",
     show: bool = False,
-    renderer: Optional[str] = "notebook_connected",   # igual que tu notebook
-    save_image: Optional[Path] = None,                # ej: Path("pavlof.svg")
+    renderer: Optional[str] = "notebook_connected",
+    save_image: Optional[Path] = None,
     image_format: str = "svg",
     image_width: int = 1200,
     image_height: int = 900,
     image_engine: str = "kaleido",
 ):
     """
-    Replica tu notebook:
-      - filtra por YEAR y colorea por mes (mode="year_month")
-      - o colorea viejo->nuevo por tiempo (mode="time")
+    3D catalog plot:
+      - mode="year_month": filter by year and color by month
+      - mode="time": color by time (old -> new)
       - DEM (pygmt) + Surface (plotly) + Scatter3d (plotly)
-      - interactivo (fig se mueve) si el renderer está bien configurado
-      - opcional: fig.show() y fig.write_image()
+      - interactive if the renderer is set correctly
+      - optional: fig.show() and fig.write_image()
     """
     import numpy as np
     import pandas as pd
     import pygmt
     import plotly.graph_objects as go
 
-    # 1) normaliza a canónicas (datetime/lat/lon/depth_km/magnitude si existen)
+    # 1) Normalize to canonical columns (datetime/lat/lon/depth_km/magnitude if present)
     df = normalize_catalog(catalog, catc=catc)
     df = df.dropna(subset=[catc.time, catc.lat, catc.lon]).copy()
     df[catc.time] = pd.to_datetime(df[catc.time], utc=True, errors="coerce")
@@ -1056,7 +1055,7 @@ def plot_catalog_3d_topo_seismicity(
     if mode not in {"time", "year_month"}:
         raise ValueError("mode debe ser 'time' o 'year_month'.")
 
-    # 2) filtro por año si aplica (tal cual tu script)
+    # 2) Filter by year if needed
     if mode == "year_month":
         if year is None:
             raise ValueError("Para mode='year_month' debes pasar year=YYYY.")
@@ -1066,14 +1065,14 @@ def plot_catalog_3d_topo_seismicity(
     if df.empty:
         raise ValueError("No hay eventos después del filtro (revisa year o datos NaN).")
 
-    # 3) bounding box EXACTO (sin padding) tal cual tu notebook
+    # 3) Bounding box (no padding)
     minlon = float(df[catc.lon].min())
     maxlon = float(df[catc.lon].max())
     minlat = float(df[catc.lat].min())
     maxlat = float(df[catc.lat].max())
     region = [minlon, maxlon, minlat, maxlat]
 
-    # 4) DEM con PyGMT
+    # 4) DEM using PyGMT
     grid = pygmt.datasets.load_earth_relief(dem_res, region=region)
     lon = grid["lon"].values
     lat = grid["lat"].values
@@ -1081,7 +1080,7 @@ def plot_catalog_3d_topo_seismicity(
 
     Lon, Lat = np.meshgrid(lon, lat)
 
-    Z = -elev_km * float(topo_exagg)  # negativo para dejar superficie "arriba"
+    Z = -elev_km * float(topo_exagg)  # negative so the surface looks "above"
 
     surface = go.Surface(
         x=Lon,
@@ -1093,7 +1092,7 @@ def plot_catalog_3d_topo_seismicity(
         name="Topography",
     )
 
-    # 5) sizes por magnitud (tal cual tu idea)
+    # 5) Marker sizes from magnitude
     if catc.mag in df.columns:
         mags = pd.to_numeric(df[catc.mag], errors="coerce")
         mmin, mmax = float(mags.min()), float(mags.max())
@@ -1104,7 +1103,7 @@ def plot_catalog_3d_topo_seismicity(
     else:
         sizes = np.full(len(df), 6.0)
 
-    # 6) colorbar + color values
+    # 6) Color values + colorbar
     if mode == "year_month":
         color_vals = df["month"].to_numpy()
         cmin, cmax = 1, 12
@@ -1115,13 +1114,13 @@ def plot_catalog_3d_topo_seismicity(
         )
         title = f"Pavlof Volcano – {int(year)}"
     else:
-        # viejo->nuevo continuo
-        # (plotly necesita números, así que usamos epoch seconds)
+        # Continuous time (old -> new)
+        # Plotly needs numbers, so use epoch seconds
         tsec = (df[catc.time].astype("int64") / 1e9).to_numpy()
         color_vals = tsec
         cmin, cmax = float(np.min(tsec)), float(np.max(tsec))
 
-        # ticks con fechas legibles (cuantiles)
+        # Human-readable tick labels (quantiles)
         qs = np.linspace(0, 1, 6)
         tickvals = [float(np.quantile(tsec, q)) for q in qs]
         ticktext = [
@@ -1152,7 +1151,7 @@ def plot_catalog_3d_topo_seismicity(
         name="Earthquakes",
     )
 
-    # 8) cámara EXACTA como tu notebook
+    # 8) Camera settings
     r = np.sqrt(1.5**2 + 1.5**2 + 1.2**2)
     az_rad = np.deg2rad(310)
     el_rad = np.deg2rad(15)
@@ -1181,14 +1180,14 @@ def plot_catalog_3d_topo_seismicity(
 
     fig = go.Figure(data=[surface, scatter], layout=layout)
 
-    # 9) show tal cual tu notebook
+    # 9) Show (optional)
     if show:
         if renderer is None:
             fig.show()
         else:
             fig.show(renderer=renderer)
 
-    # 10) save_image opcional (como tu notebook)
+    # 10) Save image (optional)
     if save_image is not None:
         fig.write_image(
             str(save_image),
@@ -1199,5 +1198,3 @@ def plot_catalog_3d_topo_seismicity(
         )
 
     return fig
-
-

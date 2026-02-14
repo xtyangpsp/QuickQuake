@@ -57,28 +57,54 @@ def main():
     
     # Critical missing parameter in last association script version
     if config["method"] == "BGMM":
-        config["oversample_factor"] = 10
+        config["oversample_factor"] = 30
     elif config["method"] == "GMM":
         config["oversample_factor"] = 1
 
     config["dims"] = ["x(km)", "y(km)", "z(km)"]
     config["vel"] = {"p": 6.0, "s": 6.0 / 1.73}
-    config["x(km)"] = (np.array(config["xlim_degree"]) - np.array(config["center"][0])) * config["degree2km"]
-    config["y(km)"] = (np.array(config["ylim_degree"]) - np.array(config["center"][1])) * config["degree2km"]
+  
+
+    lon_min, lon_max = config["xlim_degree"]
+    lat_min, lat_max = config["ylim_degree"]
+    x0, y0 = config["center"]   # centro (lon, lat)
+
+    # Proyectar x(km) manteniendo latitud constante en el centro
+    x_min, _ = proj(lon_min, y0)
+    x_max, _ = proj(lon_max, y0)
+    config["x(km)"] = (x_min, x_max)
+
+    # Proyectar y(km) manteniendo longitud constante en el centro
+    _, y_min = proj(x0, lat_min)
+    _, y_max = proj(x0, lat_max)
+    config["y(km)"] = (y_min, y_max)
+
     config["z(km)"] = (0, 60)
+
     config["bfgs_bounds"] = (
         (config["x(km)"][0] - 1, config["x(km)"][1] + 1),
         (config["y(km)"][0] - 1, config["y(km)"][1] + 1),
         (0, config["z(km)"][1] + 1),
         (None, None),
     )
+
+
+    # config["x(km)"] = (np.array(config["xlim_degree"]) - np.array(config["center"][0])) * config["degree2km"]
+    # config["y(km)"] = (np.array(config["ylim_degree"]) - np.array(config["center"][1])) * config["degree2km"]
+    # config["z(km)"] = (0, 60)
+    # config["bfgs_bounds"] = (
+    #     (config["x(km)"][0] - 1, config["x(km)"][1] + 1),
+    #     (config["y(km)"][0] - 1, config["y(km)"][1] + 1),
+    #     (0, config["z(km)"][1] + 1),
+    #     (None, None),
+    # )
     config["dbscan_eps"] = 15
     config["dbscan_min_samples"] = 4
-    config["min_picks_per_eq"] = 4
+    config["min_picks_per_eq"] = 6
     config["min_p_picks_per_eq"] = 0#new code form git hub example 
     config["min_s_picks_per_eq"] = 0#new code form git hub example 
     config["max_sigma11"] = 2.0
-    config["max_sigma22"] = 2.0
+    config["max_sigma22"] = 1.0
     config["max_sigma12"] = 1.0
 
     if config["use_amplitude"]:

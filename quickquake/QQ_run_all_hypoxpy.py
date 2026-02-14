@@ -44,7 +44,7 @@ SCRIPTS = {
 
 RUN_CONFIG   = False
 RUN_DL       =  False
-RUN_PHASENET = True
+RUN_PHASENET = False
 RUN_GAMMA    = True
 
 RUN_MERGE_GAMMA = True
@@ -54,7 +54,7 @@ LOCATION_BINPATH = "/home/elizabeth/bin"  #
 LOCATION_NAMEBASE = "GAMMA"
 LOCATION_EXTRA_ARGS = []  # ej: ["--cleanup"]
 
-RUN_QC_VELOCITY = True
+RUN_QC_VELOCITY = False
 QC_PRE_S  = 10.0
 QC_POST_S = 40.0
 QC_FREQMIN = 1.0

@@ -23,52 +23,65 @@ BASE_DIR  = Path(__file__).resolve().parent.parent
 DATA_ROOT = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"
 
-CENTER   = (-161.8903, 55.4133)
-DEG      = 1.0
-NETWORKS = ["AV"]
-CHANNELS = "BHZ,BHN,BHE,SHZ,SHN,SHE"
-CLIENT   = "IRIS"
-REGION   = "pavlof"
 
-SCRIPTS = {
-    "config":   BASE_DIR / "quickquake/QQ_config.py",
-    "stations": BASE_DIR / "quickquake/QQ_dl_stations.py",
-    "download": BASE_DIR / "quickquake/QQ_dl_data.py",
-    "phasenet": BASE_DIR / "quickquake/QQ_predict.py",
-    "gamma":    BASE_DIR / "quickquake/QQ_gamma.py",
-    "merge":    BASE_DIR / "quickquake/QQ_merge_gamma_outputs.py",
-    "location": BASE_DIR / "quickquake/QQ_location_hypoxpy.py",
-    "qc_velocity": BASE_DIR / "quickquake/QQ_qc_velocity.py",
+RUN_CONFIG   =  False
 
-}
+# config options (user edits )
+center   = (-161.8903, 55.4133)
+deg      = 1.0
+networks = ["AV"]
+channels = "BHZ,BHN,BHE,SHZ,SHN,SHE"
+client   = "IRIS"
+region   = "pavlof"
 
-RUN_CONFIG   = False
-RUN_DL       =  False
-RUN_PHASENET = False
+RUN_DL       = False
+
+RUN_PHASENET = True
+# phasenet options (user edits )
+phasenet_min_p_prob = 0.30
+phasenet_min_s_prob = 0.30
+phasenet_mpd        = 50  # minimum peak distance
+
 RUN_GAMMA    = True
+# gamma options (user edits )
+gamma_method           = "BGMM"   # default: BGMM
+gamma_oversample_factor = 30       # default: 30 for BGMM
+gamma_min_picks_per_eq = 6        # default: 6
+gamma_max_sigma11      = 2      # S
+gamma_max_sigma22      = 1     #m/s
+gamma_max_sigma12      = 1     #covariance
 
 RUN_MERGE_GAMMA = True
-
-RUN_LOCATION     = True
-LOCATION_BINPATH = "/home/elizabeth/bin"  # 
+RUN_LOCATION      = True
+LOCATION_BINPATH  = "/home/elizabeth/bin"
 LOCATION_NAMEBASE = "GAMMA"
 LOCATION_EXTRA_ARGS = []  # ej: ["--cleanup"]
 
-RUN_QC_VELOCITY = False
-QC_PRE_S  = 10.0
-QC_POST_S = 40.0
-QC_FREQMIN = 1.0
-QC_FREQMAX = 5.0
-QC_VMIN = 2.0
-QC_VMAX = 8.0
-QC_VSTEPS = 100
-QC_WINLEN = 1.0
+RUN_QC= True
+# qc options (user edits)
+qc_vmin_curve   = 2.0
+qc_vmax_curve   = 8.0
+qc_vsteps_curve = 150
+qc_winlen = 1
+qc_noise_percentile  = 50.0
+qc_signal_percentile = 90.0
+qc_min_ratio = 2.0 
+qc_make_plot = False
+qc_max_plots = 50 
 
-QC_MAKE_PLOT = False   # 
-QC_MAX_EVENTS = 0      # 
+# SCRIPTS 
 
+SCRIPTS = {
+    "config":      BASE_DIR / "quickquake/QQ_config.py",
+    "stations":    BASE_DIR / "quickquake/QQ_dl_stations.py",
+    "download":    BASE_DIR / "quickquake/QQ_dl_data.py",
+    "phasenet":    BASE_DIR / "quickquake/QQ_predict.py",
+    "gamma":       BASE_DIR / "quickquake/QQ_gamma.py",
+    "merge":       BASE_DIR / "quickquake/QQ_merge_gamma_outputs.py",
+    "location":    BASE_DIR / "quickquake/QQ_location_hypoxpy.py",
+    "qc_velocity": BASE_DIR / "quickquake/QQ_qc.py",
+}
 
-# 
 # HELPERS
 #
 
@@ -95,12 +108,12 @@ def process_window(start, end, out_dir: Path):
             "--start", start.isoformat(),
             "--end", end.isoformat(),
             "--output", str(config),
-            "--center=" + f"{CENTER[0]},{CENTER[1]}",
-            "--deg", str(DEG),
-            "--networks", ",".join(NETWORKS),
-            "--channels", CHANNELS,
-            "--client", CLIENT,
-            "--region", REGION
+            "--center=" + f"{center[0]},{center[1]}",
+            "--deg", str(deg),
+            "--networks", ",".join(networks),
+            "--channels", channels,
+            "--client", client,
+            "--region", region
         ], "Config"),
 
         (RUN_DL, [
@@ -118,13 +131,16 @@ def process_window(start, end, out_dir: Path):
 
         (RUN_PHASENET, [
             sys.executable, str(SCRIPTS["phasenet"]),
-            "--model", str(MODEL_DIR),
+            "--model_dir", str(MODEL_DIR),  # predict.py expects --model_dir
             "--data_dir", str(out_dir / "waveforms"),
             "--data_list", str(out_dir / "input_data.csv"),
             "--stations", str(stations),
             "--result_dir", str(out_dir),
             "--format", "mseed_array",
-            "--amplitude"
+            "--amplitude",
+            "--min_p_prob", str(phasenet_min_p_prob),
+            "--min_s_prob", str(phasenet_min_s_prob),
+            "--mpd", str(phasenet_mpd),
         ], "PhaseNet"),
 
         (RUN_GAMMA, [
@@ -132,18 +148,31 @@ def process_window(start, end, out_dir: Path):
             "--config", str(config),
             "--picks", str(picks),
             "--stations", str(stations),
-            "--output_dir", str(out_dir)
+            "--output_dir", str(out_dir),
+
+            # user-facing gamma args
+            "--method", str(gamma_method),
+            "--oversample_factor", str(gamma_oversample_factor),
+            "--min_picks_per_eq", str(gamma_min_picks_per_eq),
+            "--max_sigma11", str(gamma_max_sigma11),
+            "--max_sigma22", str(gamma_max_sigma22),
+            "--max_sigma12", str(gamma_max_sigma12),
         ], "GaMMA"),
     ]
 
     for enabled, cmd, name in steps:
         if enabled:
+            if name == "GaMMA" and not picks.exists():
+                raise FileNotFoundError(
+                    f"GaMMA requires picks.csv but it was not found:\n  {picks}\n"
+                    f"Did you run PhaseNet for this chunk (RUN_PHASENET=True)?"
+                )
             run_step(cmd, name, cwd=BASE_DIR)
 
 
-# 
+#
 # MAIN
-# 
+#
 
 def main():
     current  = datetime.fromisoformat(START)
@@ -176,33 +205,38 @@ def main():
             "--namebase", str(LOCATION_NAMEBASE),
         ] + list(LOCATION_EXTRA_ARGS)
         run_step(cmd_loc, "HypoXPy relocation (HypoInverse + HypoDD)", cwd=BASE_DIR)
-        
-    # 4) QC velocity (as subprocess)
-    if RUN_QC_VELOCITY:
+
+
+
+
+    # 4) QC (as subprocess)
+    if RUN_QC:
         cmd_qc = [
             sys.executable, str(SCRIPTS["qc_velocity"]),
             "--data_root", str(DATA_ROOT),
             "--namebase", str(LOCATION_NAMEBASE),
 
-            "--pre_s", str(QC_PRE_S),
-            "--post_s", str(QC_POST_S),
-            "--freqmin", str(QC_FREQMIN),
-            "--freqmax", str(QC_FREQMAX),
+            "--vmin_curve", str(qc_vmin_curve),
+            "--vmax_curve", str(qc_vmax_curve),
+            "--vsteps_curve", str(qc_vsteps_curve),
 
-            "--vmin", str(QC_VMIN),
-            "--vmax", str(QC_VMAX),
-            "--vsteps", str(QC_VSTEPS),
+            "--winlen", str(qc_winlen),
 
-            "--winlen", str(QC_WINLEN),
-
-            "--max_events", str(QC_MAX_EVENTS),
+            "--noise_percentile", str(qc_noise_percentile),
+            "--signal_percentile", str(qc_signal_percentile),
+            "--min_ratio", str(qc_min_ratio),
+            "--max_plots", str(qc_max_plots),   
         ]
-        if QC_MAKE_PLOT:
+
+        if qc_make_plot:
             cmd_qc.append("--make_plot")
 
-        run_step(cmd_qc, "QC: 1D velocity energy curve", cwd=BASE_DIR)
+        run_step(cmd_qc, "QC: velocity percentile ratio filter", cwd=BASE_DIR)
 
-    
+
+
+
+
 
 
 if __name__ == "__main__":

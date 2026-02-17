@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 
 import matplotlib.pyplot as plt
 import numpy as np
-from detect_peaks import detect_peaks
+from .detect_peaks import detect_peaks
 
 # def extract_picks(preds, fnames=None, station_ids=None, t0=None, config=None):
 

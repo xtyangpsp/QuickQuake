@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 
-import sys
-sys.path.append("/home/elizabeth/soft/src/QuickQuake/dependencies/PhaseNet/phasenet")
-
 #THIS ENTIRE CODE BELONGS TO THE PHASENET AUTHOR. THIS PYTHON FILE IS HERE FOR THE PURPOSE OF MAKING THE DETECTION PROCESS EASIER TO PERFORM.
 
 """
@@ -25,9 +22,10 @@ import h5py
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from data_reader import DataReader_mseed_array, DataReader_pred
-from model import ModelConfig, UNet
-from postprocess import (
+
+from phasenet.data_reader import DataReader_mseed_array, DataReader_pred
+from phasenet.model import ModelConfig, UNet
+from phasenet.postprocess import (
     extract_amplitude,
     extract_picks,
     save_picks,
@@ -35,7 +33,7 @@ from postprocess import (
     save_prob_h5,
 )
 from tqdm import tqdm
-from visulization import plot_waveform
+from phasenet.visulization import plot_waveform
 
 tf.compat.v1.disable_eager_execution()
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)

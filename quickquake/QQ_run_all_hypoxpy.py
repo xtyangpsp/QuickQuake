@@ -10,6 +10,7 @@ import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 import sys
+import os
 
 # 
 # CONFIGURATION
@@ -67,7 +68,7 @@ qc_noise_percentile  = 50.0
 qc_signal_percentile = 90.0
 qc_min_ratio = 2.0 
 qc_make_plot = False
-qc_max_plots = 50 
+qc_max_plots = 50 #None change 
 
 # SCRIPTS 
 

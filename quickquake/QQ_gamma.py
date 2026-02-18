@@ -155,11 +155,22 @@ def main():
     )
 
     # Coordinate conversion
-    catalogs[["longitude", "latitude"]] = catalogs.apply(
-        lambda x: pd.Series(proj(longitude=x["x(km)"], latitude=x["y(km)"], inverse=True)),
-        axis=1,
-    )
-    catalogs["depth(m)"] = catalogs["z(km)"].apply(lambda x: x * 1e3)
+   
+    if len(catalogs) == 0:
+        # No events: create empty columns so saving doesn't crash
+        catalogs["longitude"] = pd.Series(dtype=float)
+        catalogs["latitude"]  = pd.Series(dtype=float)
+        catalogs["depth(m)"]  = pd.Series(dtype=float)
+    else:
+        def xy_to_lonlat(row):
+            # inverse=True expects x, y (NOT longitude/latitude)
+            lon, lat = proj(row["x(km)"], row["y(km)"], inverse=True)
+            return pd.Series([lon, lat], index=["longitude", "latitude"])
+
+        lonlat = catalogs.apply(xy_to_lonlat, axis=1)
+        catalogs[["longitude", "latitude"]] = lonlat
+        catalogs["depth(m)"] = catalogs["z(km)"].astype(float) * 1e3
+
 
     # Save results
     os.makedirs(args.output_dir, exist_ok=True)

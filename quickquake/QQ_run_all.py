@@ -25,7 +25,7 @@ DATA_ROOT = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"
 
 
-RUN_CONFIG   =  False
+RUN_CONFIG   =  True
 
 # config options (user edits )
 center   = (-161.8903, 55.4133)
@@ -35,7 +35,7 @@ channels = "BHZ,BHN,BHE,SHZ,SHN,SHE"
 client   = "IRIS"
 region   = "pavlof"
 
-RUN_DL       = False
+RUN_DL       = True
 
 RUN_PHASENET = True
 # phasenet options (user edits )

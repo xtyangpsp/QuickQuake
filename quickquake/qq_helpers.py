@@ -1198,3 +1198,630 @@ def plot_catalog_3d_topo_seismicity(
         )
 
     return fig
+
+# 
+# =========================
+# MAPVIEW: RELIEF + SEISMICITY
+# # =========================
+# MAPVIEW (ESRI RELIEF) – minimal helpers
+# =========================
+
+import numpy as np
+import pandas as pd
+
+
+def filter_catalog_time(catalog, start, end, cols=None):
+    """
+    Retorna catálogo entre [start, end] (UTC). start/end pueden ser str o datetime.
+    """
+    cols = cols or CatalogCols()
+    t = pd.to_datetime(catalog[cols.time], utc=True, errors="coerce")
+    start = pd.to_datetime(start, utc=True)
+    end   = pd.to_datetime(end, utc=True)
+    m = (t >= start) & (t <= end)
+    return catalog.loc[m].copy()
+
+
+def make_quakes_for_map(catalog, start, end, catc=None):
+    """
+    EXACTO para tu script:
+      quakes_for_map['lon'], ['lat'], ['depth'], ['mag'], ['datetime']
+    """
+    catc = catc or CatalogCols()
+    df = filter_catalog_time(catalog, start, end, cols=catc)
+
+    out = pd.DataFrame({
+        "lon": pd.to_numeric(df[catc.lon], errors="coerce"),
+        "lat": pd.to_numeric(df[catc.lat], errors="coerce"),
+        "depth": pd.to_numeric(df.get(catc.depth_km, 0.0), errors="coerce").fillna(0.0),
+        "mag": pd.to_numeric(df.get(catc.mag, np.nan), errors="coerce"),
+        "datetime": pd.to_datetime(df[catc.time], utc=True, errors="coerce"),
+    }).dropna(subset=["lon", "lat", "datetime"])
+
+    return out
+
+
+def make_stations_wide_for_map(stations, stc=None):
+    """
+    Formato WIDE para que tu patrón funcione:
+        stations_t = stations_wide.T
+        stations_t['longitude'], stations_t['latitude']
+    """
+    stc = stc or StationCols()
+    df = stations.copy()
+
+    # Normaliza nombres si vienen como latitude/longitude
+    if stc.lon not in df.columns and "longitude" in df.columns:
+        df = df.rename(columns={"longitude": stc.lon})
+    if stc.lat not in df.columns and "latitude" in df.columns:
+        df = df.rename(columns={"latitude": stc.lat})
+
+    if stc.station_id not in df.columns:
+        raise KeyError(f"stations debe tener columna '{stc.station_id}'. Columns={list(df.columns)}")
+    if stc.lon not in df.columns or stc.lat not in df.columns:
+        raise KeyError(f"stations debe tener columnas '{stc.lon}' y '{stc.lat}'. Columns={list(df.columns)}")
+
+    cols = [stc.lon, stc.lat]
+    if stc.elev_km in df.columns:
+        cols.append(stc.elev_km)
+
+    wide = df.set_index(stc.station_id)[cols].T.copy()
+    wide = wide.rename(index={stc.lon: "longitude", stc.lat: "latitude", stc.elev_km: "elev_km"})
+
+    return wide
+
+
+def ellipse_lonlat_from_km(lon0, lat0, a_km, b_km, theta_deg=0.0, n=200):
+    """
+    Elipse centrada en (lon0, lat0), semiejes a_km/b_km (km),
+    rotación theta_deg (grados, CCW). Aproximación local km->deg.
+    """
+    theta = np.deg2rad(float(theta_deg))
+    km_per_deg_lat = 111.0
+    km_per_deg_lon = 111.0 * np.cos(np.deg2rad(float(lat0)))
+
+    t = np.linspace(0, 2*np.pi, int(n))
+    ex = float(a_km) * np.cos(t)
+    ey = float(b_km) * np.sin(t)
+
+    x0 = ex * np.cos(theta) - ey * np.sin(theta)
+    y0 = ex * np.sin(theta) + ey * np.cos(theta)
+
+    lon_ell = float(lon0) + x0 / km_per_deg_lon
+    lat_ell = float(lat0) + y0 / km_per_deg_lat
+    return lon_ell, lat_ell
+
+
+def plot_mapview_seismicity(
+    catalog,
+    stations,
+    start,
+    end,
+    *,
+    depth_vmin=0.0,
+    depth_vmax=40.0,
+    cmap_name="gist_rainbow",
+    size_k=22.0,
+    marker_min=6.0,
+    ellipse_lon=None,
+    ellipse_lat=None,
+    a_km=12.0,
+    b_km=6.0,
+    theta_deg=0.0,
+    relief_zoom=12,
+    pad_lon=0.25,
+    pad_lat=0.15,
+    step_lon=0.5,
+    step_lat=0.25,
+    labelsize=20,
+    figsize=(15, 8),
+    savefig=False,
+    out_png=None,
+    dpi=600,
+):
+    import matplotlib.pyplot as plt
+    import matplotlib as mpl
+    import matplotlib.ticker as mticker
+    import cartopy.crs as ccrs
+    import cartopy.mpl.ticker as cticker
+    from cartopy.io import img_tiles as cimgt
+
+    # EXACTAMENTE estilo ESRI shaded relief (igual que tu script)
+    class ShadedReliefESRI(cimgt.GoogleTiles):
+        def _image_url(self, tile):
+            x, y, z = tile
+            return (
+                "https://server.arcgisonline.com/ArcGIS/rest/services/"
+                f"World_Shaded_Relief/MapServer/tile/{z}/{y}/{x}.jpg"
+            )
+
+    quakes_for_map = make_quakes_for_map(catalog, start, end)
+    stations_wide  = make_stations_wide_for_map(stations)
+
+    if quakes_for_map.empty:
+        raise ValueError("No hay eventos en el rango [start, end].")
+
+    minlon = float(quakes_for_map["lon"].min()) - float(pad_lon)
+    maxlon = float(quakes_for_map["lon"].max()) + float(pad_lon)
+    minlat = float(quakes_for_map["lat"].min()) - float(pad_lat)
+    maxlat = float(quakes_for_map["lat"].max()) + float(pad_lat)
+    extent = (minlon, maxlon, minlat, maxlat)
+
+    cmap = plt.get_cmap(str(cmap_name), 256)
+    norm = mpl.colors.Normalize(float(depth_vmin), float(depth_vmax))
+
+    center_lon = (minlon + maxlon) / 2
+    center_lat = (minlat + maxlat) / 2
+
+    fig, ax = plt.subplots(
+        figsize=figsize,
+        subplot_kw={
+            "projection": ccrs.LambertAzimuthalEqualArea(
+                central_longitude=center_lon,
+                central_latitude=center_lat
+            )
+        }
+    )
+    fig.subplots_adjust(left=0.06, right=0.98, bottom=0.06, top=0.98)
+
+    # IMPORTANTE: especifica crs del extent (PlateCarree) para que tiles no se “pierdan”
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
+
+    # Relief ESRI (requiere internet)
+    ax.add_image(ShadedReliefESRI(), int(relief_zoom))
+
+    # Quakes size = size_k * mag (igual tu script)
+    mag = quakes_for_map["mag"].to_numpy(dtype=float)
+    sizes = float(size_k) * mag
+    sizes = np.where(np.isfinite(sizes), sizes, float(marker_min))
+    sizes = np.clip(sizes, float(marker_min), None)
+
+    sc = ax.scatter(
+        quakes_for_map["lon"], quakes_for_map["lat"],
+        s=sizes,
+        c=quakes_for_map["depth"],
+        cmap=cmap, norm=norm,
+        edgecolor="w", linewidth=0.3,
+        transform=ccrs.PlateCarree(),
+        alpha=0.9,
+        label="Earthquakes"
+    )
+
+    # Stations en tu formato exacto
+    stations_t = stations_wide.T
+    ax.scatter(
+        stations_t["longitude"], stations_t["latitude"],
+        s=125, marker="^",
+        facecolor="black", edgecolor="w", linewidth=0.5,
+        transform=ccrs.PlateCarree(),
+        label="Stations"
+    )
+
+    # Elipse
+    if ellipse_lon is None:
+        ellipse_lon = float(np.nanmedian(quakes_for_map["lon"]))
+    if ellipse_lat is None:
+        ellipse_lat = float(np.nanmedian(quakes_for_map["lat"]))
+
+    lon_ell, lat_ell = ellipse_lonlat_from_km(
+        ellipse_lon, ellipse_lat, a_km, b_km, theta_deg=theta_deg, n=200
+    )
+
+    ax.plot(
+        lon_ell, lat_ell,
+        transform=ccrs.PlateCarree(),
+        color="black",
+        linestyle="-",
+        linewidth=1.5,
+        label="Pavlof histogram"
+    )
+
+    # Grid y labels
+    gl = ax.gridlines(draw_labels=True, linestyle="--", linewidth=0.5, alpha=0.5)
+    gl.top_labels = gl.right_labels = False
+    gl.xlabel_style = {"size": labelsize, "color": "black"}
+    gl.ylabel_style = {"size": labelsize, "color": "black", "rotation": 90}
+
+    gl.xlocator = mticker.FixedLocator(np.arange(np.floor(minlon), np.ceil(maxlon) + 1e-6, float(step_lon)))
+    gl.ylocator = mticker.FixedLocator(np.arange(np.floor(minlat), np.ceil(maxlat) + 1e-6, float(step_lat)))
+    gl.xformatter = cticker.LongitudeFormatter()
+    gl.yformatter = cticker.LatitudeFormatter()
+
+    # Colorbar + legend
+    cbar = plt.colorbar(sc, ax=ax, fraction=0.03, pad=0.015, aspect=40)
+    cbar.set_label("Depth (km)", fontsize=20)
+    ticks = np.linspace(float(depth_vmin), float(depth_vmax), 9)
+    cbar.set_ticks(ticks)
+    cbar.set_ticklabels([f"{int(t)}" for t in ticks])
+    cbar.ax.tick_params(labelsize=16)
+
+    ax.legend(
+        loc="upper left",
+        fontsize=18,
+        frameon=True,
+        framealpha=0.8,
+        borderpad=0.3,
+        labelspacing=0.3,
+        handlelength=1.0,
+        handletextpad=0.4
+    )
+
+    start_dt = pd.to_datetime(start, utc=True)
+    end_dt   = pd.to_datetime(end, utc=True)
+
+    if savefig:
+        if out_png is None:
+            out_png = f"enhanced_seismicity_{start_dt.date()}_{end_dt.date()}.png"
+        fig.savefig(out_png, dpi=int(dpi), bbox_inches="tight")
+        print(f"[ok] saved: {out_png}")
+
+    print(
+        f"Pavlof seismicity map from {start_dt.date()} to {end_dt.date()} "
+        "(Size = Magnitude | Color = Depth)"
+    )
+
+    plt.show()
+    return fig, ax
+
+
+# =========================
+# TIMELINE HISTOGRAM + SPANS
+# =========================
+
+from typing import Iterable, Sequence, Tuple, Optional, Dict, Any
+
+def _to_naive_utc_dt(x):
+    """Convierte timestamp (str/datetime) a datetime naive en UTC (bueno para matplotlib)."""
+    import pandas as pd
+    t = pd.to_datetime(x, utc=True, errors="coerce")
+    if pd.isna(t):
+        return None
+    return t.tz_convert("UTC").tz_localize(None)
+
+def _series_to_naive_utc(series):
+    """Serie a datetime naive UTC."""
+    import pandas as pd
+    s = pd.to_datetime(series, utc=True, errors="coerce")
+    s = s.dt.tz_convert("UTC").dt.tz_localize(None)
+    return s
+
+def plot_timeline_histogram(
+    catalog: "pd.DataFrame",
+    *,
+    start,
+    end,
+    spans: Sequence[Tuple[str, str, str]],
+    # time source
+    time_col: Optional[str] = None,         # si None: intenta "datetime", luego CatalogCols().time, luego "original_folder"
+    original_folder_col: str = "original_folder",
+    original_folder_fmt: str = "%Y%m%dT%H%M%S",
+    # styling knobs
+    n_bins: int = 90,
+    figsize: Tuple[float, float] = (14, 4),
+    base_fontsize: int = 15,
+    xtick_fontsize: int = 18,
+    xlabel_fontsize: int = 20,
+    legend_fontsize: int = 15,
+    hist_color: str = "black",
+    band_cmap: str = "Set2",
+    month_interval: int = 1,
+    # band layout (igual a tu script)
+    band_y0: float = 0.78,
+    band_height: float = 0.06,
+    band_gap: float = 0.01,
+    # output
+    savefig: bool = False,
+    out_png: Optional[str] = None,
+    dpi: int = 600,
+):
+    """
+    Replica tu timeline:
+      - Histograma negro con bins anchos
+      - Bandas (axvspan) por tipo encima, apiladas
+      - Ticks mensuales, rotación 45°
+    spans: lista de (t0, t1, descripcion)
+    """
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import matplotlib.dates as mdates
+
+    plt.rcParams.update({"font.size": int(base_fontsize)})
+
+    df = catalog.copy()
+
+    # --- elegir columna de tiempo ---
+    if time_col is not None and time_col in df.columns:
+        tseries = df[time_col]
+    elif "datetime" in df.columns:
+        tseries = df["datetime"]
+    else:
+        # usa tu esquema canónico si existe
+        try:
+            catc = CatalogCols()
+            if catc.time in df.columns:
+                tseries = df[catc.time]
+            elif original_folder_col in df.columns:
+                tseries = pd.to_datetime(df[original_folder_col].astype(str), format=original_folder_fmt, errors="coerce")
+            else:
+                raise KeyError
+        except Exception:
+            raise KeyError(
+                "No encuentro columna de tiempo. Pasa time_col=... o provee 'datetime' "
+                f"o '{original_folder_col}'."
+            )
+
+    df["__t__"] = _series_to_naive_utc(tseries)
+    df = df.dropna(subset=["__t__"])
+
+    # --- rango ---
+    start_dt = _to_naive_utc_dt(start)
+    end_dt   = _to_naive_utc_dt(end)
+    if start_dt is None or end_dt is None:
+        raise ValueError("start/end no se pudieron convertir a fecha.")
+
+    df = df[(df["__t__"] >= start_dt) & (df["__t__"] <= end_dt)].copy()
+
+    # --- colores por tipo ---
+    types = list(dict.fromkeys(desc for _, _, desc in spans))  # únicos preservando orden
+    cmap = plt.get_cmap(band_cmap)
+    palette = getattr(cmap, "colors", None)
+    if palette is None:
+        palette = [cmap(i) for i in np.linspace(0, 1, max(1, len(types)))]
+
+    color_map = {t: palette[i % len(palette)] for i, t in enumerate(types)}
+
+    # --- figura ---
+    fig, ax = plt.subplots(figsize=figsize, facecolor="white")
+
+    # histograma
+    counts, _, _ = ax.hist(
+        df["__t__"],
+        bins=int(n_bins),
+        color=hist_color,
+        edgecolor=hist_color,
+        alpha=0.9,
+        label="Earthquakes",
+    )
+    ax.set_ylabel("Earthquakes")
+    ax.grid(axis="y", alpha=0.3)
+
+    ymax = float(np.max(counts)) if len(counts) else 1.0
+    ax.set_ylim(0, ymax * 1.3)
+
+    # --- bandas apiladas ---
+    band_pos = {}
+    for i, t in enumerate(types):
+        ymin = band_y0 + i * (band_height + band_gap)
+        ymax_band = ymin + band_height
+        band_pos[t] = (ymin, ymax_band)
+
+    seen = set()
+    for t0, t1, desc in spans:
+        t0_dt = _to_naive_utc_dt(t0)
+        t1_dt = _to_naive_utc_dt(t1)
+        if t0_dt is None or t1_dt is None:
+            continue
+
+        ymin_band, ymax_band = band_pos[desc]
+        label = desc if desc not in seen else "_nolegend_"
+
+        ax.axvspan(
+            t0_dt, t1_dt,
+            ymin=ymin_band, ymax=ymax_band,
+            transform=ax.get_xaxis_transform(),
+            color=color_map[desc],
+            alpha=0.9,
+            label=label,
+        )
+        seen.add(desc)
+
+    # --- eje x (ticks mensuales) ---
+    ax.set_xlim(start_dt, end_dt)
+    ax.xaxis.set_major_locator(mdates.MonthLocator(interval=int(month_interval)))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %Y"))
+
+    for lab in ax.get_xticklabels():
+        lab.set_rotation(45)
+        lab.set_ha("right")
+        lab.set_fontsize(int(xtick_fontsize))
+
+    fig.subplots_adjust(bottom=0.25)
+    ax.set_xlabel("Date", fontsize=int(xlabel_fontsize))
+
+    ax.legend(loc="upper left", fontsize=int(legend_fontsize), frameon=False, ncol=1)
+
+    plt.tight_layout()
+
+    if savefig:
+        if out_png is None:
+            out_png = "pavlof_timeline_hist_combined.png"
+        fig.savefig(out_png, dpi=int(dpi), bbox_inches="tight")
+        print(f"[ok] saved: {out_png}")
+
+    meta = {
+        "n_events": int(len(df)),
+        "types": types,
+        "color_map": color_map,
+    }
+    return fig, ax, meta
+
+# =========================
+# 3D TOPO + SEISMICITY (COLOR = MONTH)
+# =========================
+
+from typing import Optional, Tuple, Dict, Any
+
+def plot_mapview3d_months(
+    catalog: "pd.DataFrame",
+    *,
+    start,
+    end,
+    depth_max: float = 40.0,
+    dem_res: str = "15s",
+    exagg: float = 4.0,
+    topo_cmap: str = "gist_earth_r",
+    quake_cmap: str = "magma",
+    size_k: float = 15.0,              # s = size_k * mag
+    topo_alpha: float = 0.95,
+    topo_stride: int = 5,
+    view_elev: float = 4.0,
+    view_azim: float = 34.0,
+    n_xticks: int = 5,
+    tick_fontsize: int = 13,
+    cbar_tick_fontsize: int = 18,
+    figsize: Tuple[float, float] = (12, 9),
+    savefig: bool = False,
+    out_png: Optional[str] = None,
+    dpi: int = 800,
+    catc: "CatalogCols" = None,
+):
+    """
+    Replica tu figura 3D:
+      - Topografía PyGMT (earth_relief) -> superficie 3D
+      - Sismicidad: x=lon, y=lat, z=depth (invertida)
+      - Color: month (1-12), cmap=magma, Normalize(1,12)
+      - Tamaño: size_k * mag
+      - Filtros: [start, end] y depth <= depth_max
+      - NO guarda por defecto (savefig=False)
+    """
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    import pygmt
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+    from matplotlib.colors import Normalize
+
+    if catc is None:
+        catc = CatalogCols()
+
+    # --- 1) Normaliza columnas (lon/lat/time/depth/mag) ---
+    df = normalize_catalog(catalog, catc=catc)
+    df = df.dropna(subset=[catc.time, catc.lat, catc.lon]).copy()
+
+    # --- 2) Tiempo + filtros ---
+    t = pd.to_datetime(df[catc.time], utc=True, errors="coerce")
+    df = df[pd.notna(t)].copy()
+    df["_t"] = t
+
+    start_dt = pd.to_datetime(start, utc=True)
+    end_dt   = pd.to_datetime(end,   utc=True)
+
+    # filtro temporal (start inclusive, end exclusive como tu script original)
+    df = df[(df["_t"] >= start_dt) & (df["_t"] < end_dt)].copy()
+
+    # depth
+    depth_col = catc.depth_km if catc.depth_km in df.columns else "depth"
+    df[depth_col] = pd.to_numeric(df.get(depth_col, 0.0), errors="coerce").fillna(0.0)
+    df = df[df[depth_col] <= float(depth_max)].copy()
+
+    # mag
+    mag_col = catc.mag if catc.mag in df.columns else "mag"
+    df[mag_col] = pd.to_numeric(df.get(mag_col, np.nan), errors="coerce").fillna(0.0)
+
+    # month
+    df["month"] = df["_t"].dt.month.astype(int)
+
+    print(f"Número de eventos después de filtros (time, depth<={depth_max} km): {len(df)}")
+
+    if df.empty:
+        raise ValueError("No hay eventos después de aplicar filtros (revisa start/end/depth_max).")
+
+    # --- 3) Región + DEM ---
+    minlon = float(df[catc.lon].min())
+    maxlon = float(df[catc.lon].max())
+    minlat = float(df[catc.lat].min())
+    maxlat = float(df[catc.lat].max())
+    region = [minlon, maxlon, minlat, maxlat]
+
+    grid = pygmt.datasets.load_earth_relief(dem_res, region=region)
+    lon = grid["lon"].values
+    lat = grid["lat"].values
+    elev_km = grid.values / 1000.0
+
+    Lon, Lat = np.meshgrid(lon, lat)
+    Z = -elev_km * float(exagg)  # negativo como en tu script
+
+    # --- 4) Plot ---
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111, projection="3d")
+
+    # Ajuste lateral como tu script
+    fig.subplots_adjust(left=0.10, right=0.90)
+
+    # Superficie topográfica
+    ax.plot_surface(
+        Lon, Lat, Z,
+        cmap=topo_cmap,
+        rstride=int(topo_stride), cstride=int(topo_stride),
+        linewidth=0, antialiased=True,
+        alpha=float(topo_alpha),
+    )
+
+    # Scatter sismicidad (color = month)
+    sc = ax.scatter(
+        df[catc.lon].astype(float),
+        df[catc.lat].astype(float),
+        df[depth_col].astype(float),
+        c=df["month"].to_numpy(),
+        cmap=quake_cmap,
+        norm=Normalize(vmin=1, vmax=12),
+        s=float(size_k) * df[mag_col].to_numpy(),
+        edgecolor="k",
+        linewidth=0.2,
+        alpha=1.0,
+        label="Earthquakes",
+    )
+
+    # ticks (similar a tu script)
+    ax.tick_params(axis="x", labelsize=int(tick_fontsize), labelrotation=0)
+    ax.tick_params(axis="y", labelsize=int(tick_fontsize) + 1, labelrotation=0)
+    ax.tick_params(axis="z", labelsize=int(tick_fontsize) + 1, labelrotation=0)
+
+    # menos ticks de lon
+    xticks = np.linspace(minlon, maxlon, int(n_xticks))
+    ax.set_xticks(xticks)
+    ax.set_xticklabels([f"{x:.1f}" for x in xticks])
+
+    # depth: desde topo hasta depth_max, e invertir
+    ax.set_zlim(float(np.nanmin(Z)), float(depth_max))
+    ax.invert_zaxis()
+
+    # --- 5) Colorbar meses ---
+    cbar = fig.colorbar(
+        sc,
+        ax=ax,
+        pad=1e-14,
+        fraction=0.02,
+        shrink=0.4,
+        aspect=30,
+    )
+    cbar.ax.tick_params(labelsize=int(cbar_tick_fontsize))
+    months = np.arange(1, 13)
+    cbar.set_ticks(months)
+    cbar.set_ticklabels(["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"])
+
+    # --- 6) Vista ---
+    ax.view_init(elev=float(view_elev), azim=float(view_azim))
+
+    # --- 7) Grid 3D suave (igual idea) ---
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        axis._axinfo["grid"]["color"] = (0.5, 0.5, 0.5, 0.99)
+        axis._axinfo["grid"]["linewidth"] = 0.20
+        axis._axinfo["grid"]["linestyle"] = "--"
+
+    # --- 8) Guardar opcional ---
+    if savefig:
+        if out_png is None:
+            out_png = "mapview3d_months.png"
+        fig.savefig(out_png, dpi=int(dpi), bbox_inches="tight")
+        print(f"[ok] saved: {out_png}")
+
+    meta: Dict[str, Any] = {
+        "n_events": int(len(df)),
+        "region": region,
+        "bounds": (minlon, maxlon, minlat, maxlat),
+        "dem_res": dem_res,
+        "depth_max": float(depth_max),
+    }
+    return fig, ax, meta

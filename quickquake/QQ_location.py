@@ -220,7 +220,7 @@ def main():
         },
 
         "hypodd": {
-            "dep_corr": float(args.dep_corr),
+            "dep_corr": float(args.dep_corr), # 0.0
             "ph2dt_template": os.path.join(indir_rel, "template_ph2dt_par.inp"),
             "hypodd_template": os.path.join(indir_rel, "template_hypodd_par.inp"),
         },

@@ -25,25 +25,25 @@ DATA_ROOT = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"
 
 
-RUN_CONFIG   =  True
+RUN_CONFIG   =  False
 
 # config options (user edits )
-center   = (-161.8903, 55.4133)
+center   = (-161.8903, 55.4133) # central cooordinates for your region of interest 
 deg      = 1.0
 networks = ["AV"]
 channels = "BHZ,BHN,BHE,SHZ,SHN,SHE"
 client   = "IRIS"
 region   = "pavlof"
 
-RUN_DL       = True
+RUN_DL       = False
 
-RUN_PHASENET = True
+RUN_PHASENET = False
 # phasenet options (user edits )
 phasenet_min_p_prob = 0.30
 phasenet_min_s_prob = 0.30
 phasenet_mpd        = 50  # minimum peak distance
 
-RUN_GAMMA    = True
+RUN_GAMMA    = False
 # gamma options (user edits )
 gamma_method           = "BGMM"   # default: BGMM
 gamma_oversample_factor = 30       # default: 30 for BGMM
@@ -168,7 +168,11 @@ def process_window(start, end, out_dir: Path):
                     f"GaMMA requires picks.csv but it was not found:\n  {picks}\n"
                     f"Did you run PhaseNet for this chunk (RUN_PHASENET=True)?"
                 )
-            run_step(cmd, name, cwd=BASE_DIR)
+            try:
+                run_step(cmd, name, cwd=BASE_DIR)
+            except Exception as e:
+                print("Error running"+name+": "+str(e))
+                continue
 
 
 #
@@ -204,6 +208,7 @@ def main():
             sys.executable, str(SCRIPTS["location"]),
             "--binpath", str(LOCATION_BINPATH),
             "--namebase", str(LOCATION_NAMEBASE),
+            "--dep_corr", "0",
         ] + list(LOCATION_EXTRA_ARGS)
         run_step(cmd_loc, "HypoXPy relocation (HypoInverse + HypoDD)", cwd=BASE_DIR)
 

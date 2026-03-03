@@ -122,7 +122,7 @@ def main():
     ap.add_argument("--depth_max", type=float, default=20.0)
     ap.add_argument("--depth_step", type=float, default=1.0)
 
-    ap.add_argument("--dep_corr", type=float, default=5.0)
+    ap.add_argument("--dep_corr", type=float, default=0.0)
     ap.add_argument("--cleanup", action="store_true")
     ap.add_argument("--qc_phase", action="store_true")  # default False
     ap.add_argument("--skip_hypoinverse", action="store_true")

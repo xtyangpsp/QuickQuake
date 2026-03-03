@@ -208,7 +208,7 @@ def main():
             sys.executable, str(SCRIPTS["location"]),
             "--binpath", str(LOCATION_BINPATH),
             "--namebase", str(LOCATION_NAMEBASE),
-            "--dep_corr", "0",
+            
         ] + list(LOCATION_EXTRA_ARGS)
         run_step(cmd_loc, "HypoXPy relocation (HypoInverse + HypoDD)", cwd=BASE_DIR)
 

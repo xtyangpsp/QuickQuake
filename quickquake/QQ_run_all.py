@@ -206,6 +206,8 @@ def main():
     if RUN_LOCATION:
         cmd_loc = [
             sys.executable, str(SCRIPTS["location"]),
+            "--merged_dir", str(DATA_ROOT / "merged"),
+            "--templates_dir", str(BASE_DIR / "hypox_templates"),
             "--binpath", str(LOCATION_BINPATH),
             "--namebase", str(LOCATION_NAMEBASE),
             

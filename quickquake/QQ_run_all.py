@@ -26,7 +26,7 @@ DATA_ROOT = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"
 
 
-RUN_CONFIG   =  True
+RUN_CONFIG   =  False
 
 # config options (user edits )
 center   = (-161.8903, 55.4133) # central cooordinates for your region of interest 
@@ -36,15 +36,15 @@ channels = "BHZ,BHN,BHE,SHZ,SHN,SHE"
 client   = "IRIS"
 region   = "pavlof"
 
-RUN_DL       = True
+RUN_DL       = False
 
-RUN_PHASENET = True
+RUN_PHASENET = False
 # phasenet options (user edits )
 phasenet_min_p_prob = 0.30
 phasenet_min_s_prob = 0.30
 phasenet_mpd        = 50  # minimum peak distance
 
-RUN_GAMMA    = True
+RUN_GAMMA    = False
 # gamma options (user edits )
 gamma_method           = "BGMM"   # default: BGMM
 gamma_oversample_factor = 30       # default: 30 for BGMM
@@ -53,14 +53,16 @@ gamma_max_sigma11      = 2      # S
 gamma_max_sigma22      = 1     #m/s
 gamma_max_sigma12      = 1     #covariance
 
-RUN_MERGE_GAMMA = True
-RUN_LOCATION      = True
+RUN_MERGE_GAMMA = False
+RUN_LOCATION      = False
 LOCATION_BINPATH  = "/home/elizabeth/bin"
 LOCATION_NAMEBASE = "GAMMA"
 LOCATION_EXTRA_ARGS = []  # ej: ["--cleanup"]
 
 RUN_QC= True
 # qc options (user edits)
+qc_min_total_stations = 4 #must be a positive number 
+qc_min_valid_stations_per_v = None  # None => defaults to qc_min_total_stations
 qc_vmin_curve   = 2.0
 qc_vmax_curve   = 8.0
 qc_vsteps_curve = 150
@@ -236,6 +238,7 @@ def main():
             "--vsteps_curve", str(qc_vsteps_curve),
 
             "--winlen", str(qc_winlen),
+            "--min_total_stations", str(qc_min_total_stations),
 
             "--noise_percentile", str(qc_noise_percentile),
             "--signal_percentile", str(qc_signal_percentile),
@@ -245,6 +248,8 @@ def main():
 
         if qc_make_plot:
             cmd_qc.append("--make_plot")
+        if qc_min_valid_stations_per_v is not None:
+            cmd_qc += ["--min_valid_stations_per_v", str(qc_min_valid_stations_per_v)]    
 
         run_step(cmd_qc, "QC: velocity percentile ratio filter", cwd=BASE_DIR)
 

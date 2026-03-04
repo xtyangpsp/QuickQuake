@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-QQ_qc_velocity.py
+QQ_qc.py
 
 QC por curva de energía vs velocidad usando percentiles:
 Percentile_energy_ratio = P(signal_percentile) / P(noise_percentile)
@@ -50,7 +50,6 @@ EPS = 1e-12
 MAX_EVENTS = 0  # 0 = all (no user control)
 
 MIN_TOTAL_STATIONS = 4
-MIN_VALID_STATIONS_PER_V = 4
 
 CHUNK_RE = re.compile(r"^\d{8}T\d{6}$")
 
@@ -297,6 +296,8 @@ def qc_one_event(
     signal_percentile: float,
     make_plot: bool,
     plot_dir: Path,
+    min_total_stations: int,
+    min_valid_stations_per_v: int,
 ):
     if not (0.0 < float(noise_percentile) < 100.0 and 0.0 < float(signal_percentile) < 100.0):
         raise ValueError("noise_percentile y signal_percentile deben estar en (0, 100).")
@@ -317,12 +318,12 @@ def qc_one_event(
         return None
 
     stations_with_picks = ev_picks["id"].unique().tolist()
-    if len(stations_with_picks) < int(MIN_TOTAL_STATIONS):
+    if len(stations_with_picks) < int(min_total_stations):
         return None
 
     dist_map_all = stations_by_hypo_distance_km(stations, ev_lat, ev_lon, ev_depth_km)
     dist_map = {sid: dist_map_all[sid] for sid in stations_with_picks if sid in dist_map_all}
-    if len(dist_map) < int(MIN_TOTAL_STATIONS):
+    if len(dist_map) < int(min_total_stations):
         return None
 
     st_raw, files = cache.get_stream(t_start, t_end, times, dirs, pad_neighbors=PAD_NEIGHBORS)
@@ -358,8 +359,9 @@ def qc_one_event(
 
         prepped[sid] = (tr, float(dkm))
 
-    if len(prepped) < int(MIN_TOTAL_STATIONS):
+    if len(prepped) < int(min_total_stations):
         return None
+    req = int(min(min_valid_stations_per_v, len(prepped))) 
 
     v_grid = np.flip(np.linspace(float(vmin_curve), float(vmax_curve), int(vsteps_curve)))
     energies = np.full_like(v_grid, np.nan, dtype=np.float64)
@@ -386,7 +388,8 @@ def qc_one_event(
             Ev_sum += E
             n_valid += 1
 
-        if n_valid >= int(MIN_VALID_STATIONS_PER_V):
+         
+        if n_valid >= req:
             energies[i] = Ev_sum / float(n_valid)
 
     if not np.any(np.isfinite(energies)) or float(np.nanmax(energies)) <= 0.0:
@@ -455,7 +458,8 @@ def qc_one_event(
         "Percentile_energy_ratio": float(ratio),
         "winlen_s": float(winlen),
         "num_stations": int(len(prepped)),
-        "min_valid_stations_per_v": int(MIN_VALID_STATIONS_PER_V),
+        "min_valid_stations_per_v": int(req),
+        "min_total_stations": int(min_total_stations),
         "n_files": int(len(files)),
     }
 
@@ -483,8 +487,28 @@ def main():
     ap.add_argument("--make_plot", action="store_true", help="Save QC plots to merged/output/qc_plots_{namebase}/")
     ap.add_argument("--max_plots", type=int, default=50,
                     help="Max number of plots to save when --make_plot is enabled (default: 50)")
+    ap.add_argument(
+        "--min_total_stations",
+        type=int,
+        default=MIN_TOTAL_STATIONS,
+        help="Minimum number of unique stations required to run QC for an event (event gating).",
+    )
+
+    ap.add_argument(
+        "--min_valid_stations_per_v",
+        type=int,
+        default=None,
+        help="Minimum number of stations contributing at each test velocity. "
+            "If not provided, defaults to --min_total_stations.",
+    )
 
     args = ap.parse_args()
+    min_total_stations = int(args.min_total_stations)
+    min_valid_stations_per_v = (
+        int(args.min_valid_stations_per_v)
+        if args.min_valid_stations_per_v is not None
+        else min_total_stations
+    )
 
     data_root = Path(args.data_root)
     namebase = str(args.namebase)
@@ -521,11 +545,16 @@ def main():
             signal_percentile=args.signal_percentile,
             make_plot=do_plot,
             plot_dir=plot_dir,
+            min_total_stations=min_total_stations,
+            min_valid_stations_per_v=min_valid_stations_per_v,
+            
         )
         if r is not None:
             rows.append(r)
             if do_plot:
                 plots_left -= 1
+
+       
 
     qc_df = pd.DataFrame(rows)
     qc_df.to_csv(qc_metrics_csv, index=False)

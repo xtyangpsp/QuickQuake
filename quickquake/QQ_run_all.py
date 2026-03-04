@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import sys
 import os
+import traceback
 
 # 
 # CONFIGURATION
@@ -25,7 +26,7 @@ DATA_ROOT = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"
 
 
-RUN_CONFIG   =  False
+RUN_CONFIG   =  True
 
 # config options (user edits )
 center   = (-161.8903, 55.4133) # central cooordinates for your region of interest 
@@ -35,15 +36,15 @@ channels = "BHZ,BHN,BHE,SHZ,SHN,SHE"
 client   = "IRIS"
 region   = "pavlof"
 
-RUN_DL       = False
+RUN_DL       = True
 
-RUN_PHASENET = False
+RUN_PHASENET = True
 # phasenet options (user edits )
 phasenet_min_p_prob = 0.30
 phasenet_min_s_prob = 0.30
 phasenet_mpd        = 50  # minimum peak distance
 
-RUN_GAMMA    = False
+RUN_GAMMA    = True
 # gamma options (user edits )
 gamma_method           = "BGMM"   # default: BGMM
 gamma_oversample_factor = 30       # default: 30 for BGMM
@@ -164,14 +165,13 @@ def process_window(start, end, out_dir: Path):
     for enabled, cmd, name in steps:
         if enabled:
             if name == "GaMMA" and not picks.exists():
-                raise FileNotFoundError(
-                    f"GaMMA requires picks.csv but it was not found:\n  {picks}\n"
-                    f"Did you run PhaseNet for this chunk (RUN_PHASENET=True)?"
-                )
+                print(f"[SKIP] GaMMA: does not exit {picks} (PhaseNet failed or there was no data).")
+                continue
             try:
                 run_step(cmd, name, cwd=BASE_DIR)
             except Exception as e:
                 print("Error running"+name+": "+str(e))
+                traceback.print_exc()
                 continue
 
 
@@ -190,8 +190,15 @@ def main():
         out_dir    = DATA_ROOT / date_str
 
         print(f"\n{'='*70}\nProcessing chunk: {current} -> {window_end}\nOutput: {out_dir}\n{'='*70}")
-        process_window(current, window_end, out_dir)
-        current = window_end
+        # process_window(current, window_end, out_dir)
+        # current = window_end
+        try:
+            process_window(current, window_end, out_dir)
+        except Exception as e:
+            print(f"[CHUNK FAILED] {current} -> {window_end}\n  {e}")
+            traceback.print_exc()
+        finally:
+            current = window_end
 
     # 2) Merge (as subprocess)
     if RUN_MERGE_GAMMA:

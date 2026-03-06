@@ -3,20 +3,16 @@
 QQ_qc.py
 
 QC por curva de energía vs velocidad usando percentiles:
-pc_ratio_energy = P(signal_percentile) / P(noise_percentile)
+Percentile_energy_ratio = P(signal_percentile) / P(noise_percentile)
 
 - Input:
     merged/output/{namebase}_hypodd_catalog.csv
     merged/input/{namebase}_picks_cleaned.csv
     merged/input/{namebase}_station_list.json
-
 - Output:
-    1) merged/output/{namebase}_hypodd_catalog_qcfiltered.csv
-       (catálogo base de HypoDD + solo la columna pc_ratio_energy, solo eventos que pasaron)
-
-    2) merged/output/{namebase}_hypodd_catalog_qcrejected.csv
-       (catálogo base de HypoDD + solo la columna pc_ratio_energy, solo eventos que no pasaron)
-
+    1) merged/output/{namebase}_qc_metrics.csv
+    2) merged/output/{namebase}_hypodd_catalog_qcfiltered.csv
+       (mismo HypoDD + 1 columna extra, filtrado)
     3) (opcional) merged/output/qc_plots_{namebase}/qc_eventXXXX_YYYYmmddTHHMMSS.png
 """
 
@@ -242,26 +238,18 @@ def resolve_paths(data_root: Path, namebase: str):
     if not catalog_csv.exists():
         raise FileNotFoundError(f"Expected HypoDD catalog not found: {catalog_csv}")
 
+    qc_metrics_csv = merged_out / f"{namebase}_qc_metrics.csv"
     qc_filtered_catalog_csv = merged_out / f"{namebase}_hypodd_catalog_qcfiltered.csv"
-    qc_rejected_catalog_csv = merged_out / f"{namebase}_hypodd_catalog_qcrejected.csv"
 
-    return (
-        catalog_csv,
-        picks_csv,
-        stations_json,
-        qc_filtered_catalog_csv,
-        qc_rejected_catalog_csv,
-    )
+    return catalog_csv, picks_csv, stations_json, qc_metrics_csv, qc_filtered_catalog_csv
 
 
 def load_inputs(catalog_csv: Path, picks_csv: Path, stations_json: Path):
-    catalog_raw = pd.read_csv(catalog_csv)
-
-    catalog = catalog_raw.copy()
+    catalog = pd.read_csv(catalog_csv)
     picks = pd.read_csv(picks_csv)
 
-    catalog["time"] = pd.to_datetime(catalog["time"], utc=True, errors="coerce", format="mixed")
-    picks["timestamp"] = pd.to_datetime(picks["timestamp"], utc=True, errors="coerce", format="mixed")
+    catalog["time"] = pd.to_datetime(catalog["time"], utc=True, errors="coerce")
+    picks["timestamp"] = pd.to_datetime(picks["timestamp"], utc=True, errors="coerce")
 
     catalog = catalog.dropna(subset=["time"]).reset_index(drop=True)
     picks = picks.dropna(subset=["timestamp"]).reset_index(drop=True)
@@ -285,7 +273,7 @@ def load_inputs(catalog_csv: Path, picks_csv: Path, stations_json: Path):
         .reset_index(drop=True)
     )
 
-    return catalog_raw, catalog, picks, stations
+    return catalog, picks, stations
 
 
 # -------------------------
@@ -373,8 +361,7 @@ def qc_one_event(
 
     if len(prepped) < int(min_total_stations):
         return None
-
-    req = int(min(min_valid_stations_per_v, len(prepped)))
+    req = int(min(min_valid_stations_per_v, len(prepped))) 
 
     v_grid = np.flip(np.linspace(float(vmin_curve), float(vmax_curve), int(vsteps_curve)))
     energies = np.full_like(v_grid, np.nan, dtype=np.float64)
@@ -401,6 +388,7 @@ def qc_one_event(
             Ev_sum += E
             n_valid += 1
 
+         
         if n_valid >= req:
             energies[i] = Ev_sum / float(n_valid)
 
@@ -410,6 +398,11 @@ def qc_one_event(
     sig_mask = (v_grid >= float(VMIN_SIGNAL)) & (v_grid <= float(VMAX_SIGNAL)) & np.isfinite(energies)
     if not np.any(sig_mask):
         return None
+
+    i_peak = int(np.nanargmax(np.where(sig_mask, energies, -np.inf)))
+    best_v = float(v_grid[i_peak])
+    peak = float(energies[i_peak])
+    peak_pctl_rank = percentile_rank(peak, energies)
 
     e_noise = safe_percentile(energies, float(noise_percentile))
     e_signal = safe_percentile(energies, float(signal_percentile))
@@ -421,11 +414,8 @@ def qc_one_event(
     ratio = float(e_signal / (e_noise + float(EPS)))
 
     if make_plot:
-        i_peak = int(np.nanargmax(np.where(sig_mask, energies, -np.inf)))
-        best_v = float(v_grid[i_peak])
-
         import matplotlib
-        matplotlib.use("Agg")
+        matplotlib.use("Agg")  # seguro en subprocess / headless
         import matplotlib.pyplot as plt
 
         fig, ax = plt.subplots(figsize=(10, 4))
@@ -437,8 +427,8 @@ def qc_one_event(
         ax.axvspan(x0, x1, color="red", alpha=0.18, zorder=0)
         ax.axvline(best_v, color="red", lw=1.2, alpha=0.8)
 
-        ax.axhline(e_noise, color="tab:orange", lw=2.0, label=f"P{noise_percentile:.0f}={e_noise:.2e}")
-        ax.axhline(e_signal, color="tab:cyan", lw=2.0, label=f"P{signal_percentile:.0f}={e_signal:.2e}")
+        ax.axhline(e_noise,  color="tab:orange", lw=2.0, label=f"P{noise_percentile:.0f}={e_noise:.2e}")
+        ax.axhline(e_signal, color="tab:cyan",   lw=2.0, label=f"P{signal_percentile:.0f}={e_signal:.2e}")
 
         ax.set_title(
             f"event_id={eid} | {t0.strftime('%Y-%m-%d %H:%M:%S')} | "
@@ -457,7 +447,20 @@ def qc_one_event(
 
     return {
         "event_id": eid,
-        "pc_ratio_energy": float(ratio),
+        "time": row_event["time"],
+        "best_v_km_s": best_v,
+        "peak_energy": peak,
+        "peak_percentile_rank": float(peak_pctl_rank),
+        "noise_percentile": float(noise_percentile),
+        "noise_energy": float(e_noise),
+        "signal_percentile": float(signal_percentile),
+        "signal_ref_energy": float(e_signal),
+        "Percentile_energy_ratio": float(ratio),
+        "winlen_s": float(winlen),
+        "num_stations": int(len(prepped)),
+        "min_valid_stations_per_v": int(req),
+        "min_total_stations": int(min_total_stations),
+        "n_files": int(len(files)),
     }
 
 
@@ -471,38 +474,32 @@ def main():
     ap.add_argument("--data_root", required=True, type=str, help="QuickQuake data root (contains merged/)")
     ap.add_argument("--namebase", required=True, type=str, help="Namebase, e.g., GAMMA")
 
+    # USER-CONTROLLED knobs (ONLY these)
     ap.add_argument("--vmin_curve", type=float, default=2.0)
     ap.add_argument("--vmax_curve", type=float, default=8.0)
     ap.add_argument("--vsteps_curve", type=int, default=150)
     ap.add_argument("--winlen", type=float, default=0.5)
     ap.add_argument("--noise_percentile", type=float, default=50.0)
     ap.add_argument("--signal_percentile", type=float, default=90.0)
-    ap.add_argument(
-        "--min_ratio",
-        type=float,
-        default=2.0,
-        help="Keep events with pc_ratio_energy >= min_ratio",
-    )
+    ap.add_argument("--min_ratio", type=float, default=2.0,
+                    help="Keep events with Percentile_energy_ratio >= min_ratio")
 
     ap.add_argument("--make_plot", action="store_true", help="Save QC plots to merged/output/qc_plots_{namebase}/")
-    ap.add_argument(
-        "--max_plots",
-        type=int,
-        default=50,
-        help="Max number of plots to save when --make_plot is enabled (default: 50)",
-    )
+    ap.add_argument("--max_plots", type=int, default=50,
+                    help="Max number of plots to save when --make_plot is enabled (default: 50)")
     ap.add_argument(
         "--min_total_stations",
         type=int,
         default=MIN_TOTAL_STATIONS,
         help="Minimum number of unique stations required to run QC for an event (event gating).",
     )
+
     ap.add_argument(
         "--min_valid_stations_per_v",
         type=int,
         default=None,
         help="Minimum number of stations contributing at each test velocity. "
-             "If not provided, defaults to --min_total_stations.",
+            "If not provided, defaults to --min_total_stations.",
     )
 
     args = ap.parse_args()
@@ -516,15 +513,8 @@ def main():
     data_root = Path(args.data_root)
     namebase = str(args.namebase)
 
-    (
-        catalog_csv,
-        picks_csv,
-        stations_json,
-        qc_filtered_catalog_csv,
-        qc_rejected_catalog_csv,
-    ) = resolve_paths(data_root, namebase)
-
-    catalog_raw, catalog, picks_clean, stations = load_inputs(catalog_csv, picks_csv, stations_json)
+    catalog_csv, picks_csv, stations_json, qc_metrics_csv, qc_filtered_catalog_csv = resolve_paths(data_root, namebase)
+    catalog, picks_clean, stations = load_inputs(catalog_csv, picks_csv, stations_json)
 
     times, dirs = build_chunk_index(data_root)
     cache = StreamCache()
@@ -537,6 +527,7 @@ def main():
 
     for i in range(n_total):
         row_event = catalog.iloc[i]
+
         do_plot = bool(args.make_plot) and (plots_left > 0)
 
         r = qc_one_event(
@@ -556,64 +547,49 @@ def main():
             plot_dir=plot_dir,
             min_total_stations=min_total_stations,
             min_valid_stations_per_v=min_valid_stations_per_v,
+            
         )
-
         if r is not None:
             rows.append(r)
             if do_plot:
                 plots_left -= 1
 
-    qc_df = pd.DataFrame(rows)
+       
 
-    raw_out = catalog_raw.copy()
-    raw_out["_event_id_num"] = pd.to_numeric(raw_out["event_id"], errors="coerce").astype("Int64")
+    qc_df = pd.DataFrame(rows)
+    qc_df.to_csv(qc_metrics_csv, index=False)
+
+    # merge + filter catalog (append 1 column, then filter)
+    cat = catalog.copy()
+    cat["event_id"] = pd.to_numeric(cat["event_id"], errors="coerce").astype("Int64")
 
     if not qc_df.empty:
-        qc_merge = qc_df.copy()
-        qc_merge["event_id"] = pd.to_numeric(qc_merge["event_id"], errors="coerce").astype("Int64")
-        qc_merge["pc_ratio_energy"] = qc_merge["pc_ratio_energy"].round(2)
-
-        raw_out = raw_out.merge(
-            qc_merge[["event_id", "pc_ratio_energy"]],
-            left_on="_event_id_num",
-            right_on="event_id",
+        qc_df["event_id"] = pd.to_numeric(qc_df["event_id"], errors="coerce").astype("Int64")
+        merged = cat.merge(
+            qc_df[["event_id", "Percentile_energy_ratio"]],
+            on="event_id",
             how="left",
-            suffixes=("", "_qc"),
         )
     else:
-        raw_out["pc_ratio_energy"] = np.nan
+        merged = cat.copy()
+        merged["Percentile_energy_ratio"] = np.nan
 
-    if "event_id_qc" in raw_out.columns:
-        raw_out = raw_out.drop(columns=["event_id_qc"])
-
-    if "event_id_y" in raw_out.columns:
-        raw_out = raw_out.drop(columns=["event_id_y"])
-
-    if "event_id_x" in raw_out.columns:
-        raw_out = raw_out.rename(columns={"event_id_x": "event_id"})
-
-    raw_out = raw_out.drop(columns=["_event_id_num"])
-
-    passed_mask = (
-        raw_out["pc_ratio_energy"].notna()
-        & (raw_out["pc_ratio_energy"] >= float(args.min_ratio))
-    )
-
-    filtered = raw_out[passed_mask].copy()
-    rejected = raw_out[~passed_mask].copy()
+    filtered = merged[
+        merged["Percentile_energy_ratio"].notna()
+        & (merged["Percentile_energy_ratio"] >= float(args.min_ratio))
+    ].copy()
 
     filtered.to_csv(qc_filtered_catalog_csv, index=False)
-    rejected.to_csv(qc_rejected_catalog_csv, index=False)
 
-    print(f"\nWrote filtered catalog: {qc_filtered_catalog_csv}")
-    print(f"Wrote rejected catalog: {qc_rejected_catalog_csv}")
-
+    print(f"\nWrote QC metrics: {qc_metrics_csv}")
+    print(f"Wrote filtered catalog: {qc_filtered_catalog_csv}")
     if bool(args.make_plot):
         print(f"Wrote up to {int(args.max_plots)} plots in: {plot_dir}")
 
     if not qc_df.empty:
-        print(f"\nKept {len(filtered)} / {len(raw_out)} events with pc_ratio_energy >= {args.min_ratio}")
-        print(f"Rejected {len(rejected)} / {len(raw_out)} events")
+        print("\nQC preview:")
+        print(qc_df.head(20).to_string(index=False))
+        print(f"\nKept {len(filtered)} / {len(merged)} events with Percentile_energy_ratio >= {args.min_ratio}")
     else:
         print("\nNo QC rows produced (qc_df empty). Check inputs and waveforms.")
 

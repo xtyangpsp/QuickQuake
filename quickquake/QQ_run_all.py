@@ -53,8 +53,8 @@ gamma_max_sigma11      = 2      # S
 gamma_max_sigma22      = 1     #m/s
 gamma_max_sigma12      = 1     #covariance
 
-RUN_MERGE_GAMMA = False
-RUN_LOCATION      = False
+RUN_MERGE_GAMMA = True
+RUN_LOCATION      =  True
 LOCATION_BINPATH  = "/home/elizabeth/bin"
 LOCATION_NAMEBASE = "GAMMA"
 LOCATION_EXTRA_ARGS = []  # ej: ["--cleanup"]

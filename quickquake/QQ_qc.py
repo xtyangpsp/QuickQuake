@@ -651,6 +651,15 @@ def main():
     rejected = raw_out[rejected_mask].copy()
     skipped = raw_out[skipped_mask].copy()
 
+    # Quitar columnas de diagnóstico en filtered y rejected
+    cols_to_drop_final = [c for c in ["qc_status", "qc_reason"] if c in filtered.columns]
+    if cols_to_drop_final:
+        filtered = filtered.drop(columns=cols_to_drop_final)
+
+    cols_to_drop_final = [c for c in ["qc_status", "qc_reason"] if c in rejected.columns]
+    if cols_to_drop_final:
+        rejected = rejected.drop(columns=cols_to_drop_final)
+
     filtered.to_csv(qc_filtered_catalog_csv, index=False)
     rejected.to_csv(qc_rejected_catalog_csv, index=False)
     skipped.to_csv(qc_skipped_catalog_csv, index=False)

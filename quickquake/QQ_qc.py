@@ -5,6 +5,15 @@ QQ_qc.py
 QC por curva de energía vs velocidad usando percentiles:
 pc_ratio_energy = P(signal_percentile) / P(noise_percentile)
 
+Versión optimizada pero fiel al original:
+- Mantiene la lógica científica del original
+- NO cambia el cálculo del ratio
+- NO cambia el preprocesado por evento
+- Acelera indexando picks por event_id
+- Reusa v_grid
+- Reusa stream cache por bloque de archivos
+- Separa eventos calculados de eventos no calculados
+
 - Input:
     merged/output/{namebase}_hypodd_catalog.csv
     merged/input/{namebase}_picks_cleaned.csv
@@ -12,12 +21,15 @@ pc_ratio_energy = P(signal_percentile) / P(noise_percentile)
 
 - Output:
     1) merged/output/{namebase}_hypodd_catalog_qcfiltered.csv
-       (catálogo base de HypoDD + solo la columna pc_ratio_energy, solo eventos que pasaron)
+       (catálogo base de HypoDD + pc_ratio_energy, solo eventos que pasaron)
 
     2) merged/output/{namebase}_hypodd_catalog_qcrejected.csv
-       (catálogo base de HypoDD + solo la columna pc_ratio_energy, solo eventos que no pasaron)
+       (catálogo base de HypoDD + pc_ratio_energy, solo eventos con ratio calculado que NO pasaron)
 
-    3) (opcional) merged/output/qc_plots_{namebase}/qc_eventXXXX_YYYYmmddTHHMMSS.png
+    3) merged/output/{namebase}_hypodd_catalog_qcskipped.csv
+       (catálogo base de HypoDD + columnas QC, eventos para los que NO se pudo calcular ratio)
+
+    4) (opcional) merged/output/qc_plots_{namebase}/qc_eventXXXX_YYYYmmddTHHMMSS.png
 """
 
 from pathlib import Path
@@ -92,7 +104,7 @@ def chunk_dirs_for_window(
     if pad_neighbors:
         a = max(0, a - 1)
         b = min(len(dirs) - 1, b + 1)
-    return dirs[a : b + 1]
+    return dirs[a:b + 1]
 
 
 def waveform_files_for_window(
@@ -227,6 +239,26 @@ def percentile_rank(value: float, sample: np.ndarray) -> float:
     return float(100.0 * np.mean(s <= float(value)))
 
 
+def build_event_pick_index(picks_clean: pd.DataFrame):
+    event_to_station_ids: Dict[int, List[str]] = {}
+    grp = picks_clean.groupby("event_id_mapped", sort=False)["id"].unique()
+    for eid, ids in grp.items():
+        try:
+            event_to_station_ids[int(eid)] = [str(x) for x in ids if pd.notna(x)]
+        except Exception:
+            continue
+    return event_to_station_ids
+
+
+def build_skip_result(eid: int, reason: str):
+    return {
+        "event_id": int(eid),
+        "pc_ratio_energy": np.nan,
+        "qc_status": "skipped",
+        "qc_reason": str(reason),
+    }
+
+
 # -------------------------
 # Paths + IO
 # -------------------------
@@ -244,6 +276,7 @@ def resolve_paths(data_root: Path, namebase: str):
 
     qc_filtered_catalog_csv = merged_out / f"{namebase}_hypodd_catalog_qcfiltered.csv"
     qc_rejected_catalog_csv = merged_out / f"{namebase}_hypodd_catalog_qcrejected.csv"
+    qc_skipped_catalog_csv = merged_out / f"{namebase}_hypodd_catalog_qcskipped.csv"
 
     return (
         catalog_csv,
@@ -251,6 +284,7 @@ def resolve_paths(data_root: Path, namebase: str):
         stations_json,
         qc_filtered_catalog_csv,
         qc_rejected_catalog_csv,
+        qc_skipped_catalog_csv,
     )
 
 
@@ -294,15 +328,13 @@ def load_inputs(catalog_csv: Path, picks_csv: Path, stations_json: Path):
 
 def qc_one_event(
     row_event,
-    picks_clean: pd.DataFrame,
+    event_to_station_ids: Dict[int, List[str]],
     stations: pd.DataFrame,
     times: List[UTCDateTime],
     dirs: List[Path],
     cache: StreamCache,
     *,
-    vmin_curve: float,
-    vmax_curve: float,
-    vsteps_curve: int,
+    v_grid: np.ndarray,
     winlen: float,
     noise_percentile: float,
     signal_percentile: float,
@@ -325,22 +357,21 @@ def qc_one_event(
     t_start = t0 - float(PRE_S)
     t_end = t0 + float(POST_S)
 
-    ev_picks = picks_clean[picks_clean["event_id_mapped"] == eid]
-    if ev_picks.empty:
-        return None
+    stations_with_picks = event_to_station_ids.get(eid, [])
+    if len(stations_with_picks) == 0:
+        return build_skip_result(eid, "no_picks")
 
-    stations_with_picks = ev_picks["id"].unique().tolist()
     if len(stations_with_picks) < int(min_total_stations):
-        return None
+        return build_skip_result(eid, "too_few_stations_with_picks")
 
     dist_map_all = stations_by_hypo_distance_km(stations, ev_lat, ev_lon, ev_depth_km)
     dist_map = {sid: dist_map_all[sid] for sid in stations_with_picks if sid in dist_map_all}
     if len(dist_map) < int(min_total_stations):
-        return None
+        return build_skip_result(eid, "too_few_stations_in_metadata")
 
     st_raw, files = cache.get_stream(t_start, t_end, times, dirs, pad_neighbors=PAD_NEIGHBORS)
     if st_raw is None:
-        return None
+        return build_skip_result(eid, "no_waveforms_loaded")
 
     prepped: Dict[str, Tuple[obspy.Trace, float]] = {}
     for sid, dkm in dist_map.items():
@@ -372,11 +403,9 @@ def qc_one_event(
         prepped[sid] = (tr, float(dkm))
 
     if len(prepped) < int(min_total_stations):
-        return None
+        return build_skip_result(eid, "too_few_prepped_stations")
 
     req = int(min(min_valid_stations_per_v, len(prepped)))
-
-    v_grid = np.flip(np.linspace(float(vmin_curve), float(vmax_curve), int(vsteps_curve)))
     energies = np.full_like(v_grid, np.nan, dtype=np.float64)
     half = 0.5 * float(winlen)
 
@@ -405,18 +434,19 @@ def qc_one_event(
             energies[i] = Ev_sum / float(n_valid)
 
     if not np.any(np.isfinite(energies)) or float(np.nanmax(energies)) <= 0.0:
-        return None
+        return build_skip_result(eid, "no_valid_energy_curve")
 
     sig_mask = (v_grid >= float(VMIN_SIGNAL)) & (v_grid <= float(VMAX_SIGNAL)) & np.isfinite(energies)
     if not np.any(sig_mask):
-        return None
+        return build_skip_result(eid, "no_valid_signal_band")
 
+    # Mantener exactamente la lógica del original
     e_noise = safe_percentile(energies, float(noise_percentile))
     e_signal = safe_percentile(energies, float(signal_percentile))
     if not np.isfinite(e_noise) or e_noise <= 0.0:
-        return None
+        return build_skip_result(eid, "invalid_noise_percentile")
     if not np.isfinite(e_signal) or e_signal <= 0.0:
-        return None
+        return build_skip_result(eid, "invalid_signal_percentile")
 
     ratio = float(e_signal / (e_noise + float(EPS)))
 
@@ -458,6 +488,8 @@ def qc_one_event(
     return {
         "event_id": eid,
         "pc_ratio_energy": float(ratio),
+        "qc_status": "computed",
+        "qc_reason": "computed",
     }
 
 
@@ -522,15 +554,18 @@ def main():
         stations_json,
         qc_filtered_catalog_csv,
         qc_rejected_catalog_csv,
+        qc_skipped_catalog_csv,
     ) = resolve_paths(data_root, namebase)
 
     catalog_raw, catalog, picks_clean, stations = load_inputs(catalog_csv, picks_csv, stations_json)
+    event_to_station_ids = build_event_pick_index(picks_clean)
 
     times, dirs = build_chunk_index(data_root)
     cache = StreamCache()
 
     plot_dir = data_root / "merged" / "output" / f"qc_plots_{namebase}"
     plots_left = int(args.max_plots)
+    v_grid = np.flip(np.linspace(float(args.vmin_curve), float(args.vmax_curve), int(args.vsteps_curve)))
 
     rows = []
     n_total = len(catalog) if int(MAX_EVENTS) <= 0 else min(len(catalog), int(MAX_EVENTS))
@@ -541,14 +576,12 @@ def main():
 
         r = qc_one_event(
             row_event,
-            picks_clean,
+            event_to_station_ids,
             stations,
             times,
             dirs,
             cache,
-            vmin_curve=args.vmin_curve,
-            vmax_curve=args.vmax_curve,
-            vsteps_curve=args.vsteps_curve,
+            v_grid=v_grid,
             winlen=args.winlen,
             noise_percentile=args.noise_percentile,
             signal_percentile=args.signal_percentile,
@@ -558,10 +591,13 @@ def main():
             min_valid_stations_per_v=min_valid_stations_per_v,
         )
 
-        if r is not None:
-            rows.append(r)
-            if do_plot:
-                plots_left -= 1
+        rows.append(r)
+
+        if do_plot and r.get("qc_status") == "computed":
+            plots_left -= 1
+
+        if (i + 1) % 500 == 0 or (i + 1) == n_total:
+            print(f"[QC] processed {i + 1}/{n_total} events")
 
     qc_df = pd.DataFrame(rows)
 
@@ -571,10 +607,10 @@ def main():
     if not qc_df.empty:
         qc_merge = qc_df.copy()
         qc_merge["event_id"] = pd.to_numeric(qc_merge["event_id"], errors="coerce").astype("Int64")
-        qc_merge["pc_ratio_energy"] = qc_merge["pc_ratio_energy"].round(2)
+        qc_merge["pc_ratio_energy"] = pd.to_numeric(qc_merge["pc_ratio_energy"], errors="coerce").round(2)
 
         raw_out = raw_out.merge(
-            qc_merge[["event_id", "pc_ratio_energy"]],
+            qc_merge[["event_id", "pc_ratio_energy", "qc_status", "qc_reason"]],
             left_on="_event_id_num",
             right_on="event_id",
             how="left",
@@ -582,6 +618,8 @@ def main():
         )
     else:
         raw_out["pc_ratio_energy"] = np.nan
+        raw_out["qc_status"] = "skipped"
+        raw_out["qc_reason"] = "no_qc_rows_produced"
 
     if "event_id_qc" in raw_out.columns:
         raw_out = raw_out.drop(columns=["event_id_qc"])
@@ -594,28 +632,43 @@ def main():
 
     raw_out = raw_out.drop(columns=["_event_id_num"])
 
+    raw_out["qc_status"] = raw_out["qc_status"].fillna("skipped")
+    raw_out["qc_reason"] = raw_out["qc_reason"].fillna("missing_after_merge")
+
     passed_mask = (
         raw_out["pc_ratio_energy"].notna()
         & (raw_out["pc_ratio_energy"] >= float(args.min_ratio))
     )
 
+    rejected_mask = (
+        raw_out["pc_ratio_energy"].notna()
+        & (raw_out["pc_ratio_energy"] < float(args.min_ratio))
+    )
+
+    skipped_mask = raw_out["pc_ratio_energy"].isna()
+
     filtered = raw_out[passed_mask].copy()
-    rejected = raw_out[~passed_mask].copy()
+    rejected = raw_out[rejected_mask].copy()
+    skipped = raw_out[skipped_mask].copy()
 
     filtered.to_csv(qc_filtered_catalog_csv, index=False)
     rejected.to_csv(qc_rejected_catalog_csv, index=False)
+    skipped.to_csv(qc_skipped_catalog_csv, index=False)
 
     print(f"\nWrote filtered catalog: {qc_filtered_catalog_csv}")
     print(f"Wrote rejected catalog: {qc_rejected_catalog_csv}")
+    print(f"Wrote skipped catalog:  {qc_skipped_catalog_csv}")
 
     if bool(args.make_plot):
         print(f"Wrote up to {int(args.max_plots)} plots in: {plot_dir}")
 
-    if not qc_df.empty:
-        print(f"\nKept {len(filtered)} / {len(raw_out)} events with pc_ratio_energy >= {args.min_ratio}")
-        print(f"Rejected {len(rejected)} / {len(raw_out)} events")
-    else:
-        print("\nNo QC rows produced (qc_df empty). Check inputs and waveforms.")
+    print(f"\nKept {len(filtered)} / {len(raw_out)} events with pc_ratio_energy >= {args.min_ratio}")
+    print(f"Rejected by ratio {len(rejected)} / {len(raw_out)} events")
+    print(f"Skipped (no QC computed) {len(skipped)} / {len(raw_out)} events")
+
+    if len(skipped) > 0:
+        print("\nTop skipped reasons:")
+        print(skipped["qc_reason"].value_counts().to_string())
 
 
 if __name__ == "__main__":

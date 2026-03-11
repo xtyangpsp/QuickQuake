@@ -63,7 +63,7 @@ location_depth_max = 20.0
 location_depth_step = 1
 RUN_QC= True
 # qc options (user edits)
-qc_min_total_stations = 4 #must be a positive number 
+qc_min_total_stations = 3 #must be a positive number 
 qc_min_valid_stations_per_v = None  # None => defaults to qc_min_total_stations
 qc_vmin_curve   = 2.0
 qc_vmax_curve   = 8.0

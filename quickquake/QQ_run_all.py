@@ -58,7 +58,9 @@ RUN_LOCATION      =  True
 LOCATION_BINPATH  = "/home/elizabeth/bin"
 LOCATION_NAMEBASE = "GAMMA"
 LOCATION_EXTRA_ARGS = []  # ej: ["--cleanup"]
-
+location_depth_min = 0.0
+location_depth_max = 20.0
+location_depth_step = 1
 RUN_QC= True
 # qc options (user edits)
 qc_min_total_stations = 4 #must be a positive number 
@@ -219,7 +221,9 @@ def main():
             "--templates_dir", str(BASE_DIR / "hypox_templates"),
             "--binpath", str(LOCATION_BINPATH),
             "--namebase", str(LOCATION_NAMEBASE),
-            
+             "--depth_min", str(location_depth_min),
+            "--depth_max", str(location_depth_max),
+            "--depth_step", str(location_depth_step),
         ] + list(LOCATION_EXTRA_ARGS)
         run_step(cmd_loc, "HypoXPy relocation (HypoInverse + HypoDD)", cwd=BASE_DIR)
 

@@ -214,6 +214,7 @@ def main():
         "hypoinverse": {
             "p_model": os.path.join(indir_rel, "velo_p_eg.cre"),
             "s_model": os.path.join(indir_rel, "velo_s_eg.cre"),
+            "ref_ele": 3.0,
             "depth_list": depth_try_list,
             "min_nsta": args.min_nsta,
             "hypoinv_template": os.path.join(indir_rel, "template_hypoinv_vp-vs.txt"),

@@ -55,7 +55,8 @@ def ensure_file(path: Path, label: str):
         raise FileNotFoundError(f"Missing {label}: {path}")
 
 
-def stage_in_merged(merged_dir: Path, templates_dir: Path, namebase: str):
+def stage_in_merged(merged_dir: Path, templates_dir: Path, namebase: str,
+                    p_model_name: str, s_model_name: str):
     """
     Work INSIDE merged_dir:
       merged_dir/input
@@ -78,40 +79,46 @@ def stage_in_merged(merged_dir: Path, templates_dir: Path, namebase: str):
     ensure_file(picks_src, "merged picks (gammapicks_id.csv)")
 
     # station list should have been copied by run_all into merged/input/
-    station_src = indir / f"{namebase}_station_list.json"  # typically GAMMA_station_list.json
-    ensure_file(station_src, "station list JSON in merged/input (GAMMA_station_list.json)")
+    station_src = indir / f"{namebase}_station_list.json"
+    ensure_file(station_src, "station list JSON in merged/input")
 
     # Create canonical names expected by HypoXPy example workflow
-    link_or_copy(cat_src, indir / f"{namebase}_catalog.csv")   # input/GAMMA_catalog.csv
-    link_or_copy(picks_src, indir / f"{namebase}_picks.csv")   # input/GAMMA_picks.csv
+    link_or_copy(cat_src, indir / f"{namebase}_catalog.csv")
+    link_or_copy(picks_src, indir / f"{namebase}_picks.csv")
 
-    # Velocity models + templates live in repo/hypox_templates (your current layout)
-    pmodel = templates_dir / "velo_p_eg.cre"
-    smodel = templates_dir / "velo_s_eg.cre"
+    # Velocity models + templates live in repo/hypox_templates
+    pmodel = templates_dir / p_model_name
+    smodel = templates_dir / s_model_name
     t_hypoinv = templates_dir / "template_hypoinv_vp-vs.txt"
     t_ph2dt = templates_dir / "template_ph2dt_par.inp"
     t_hypodd = templates_dir / "template_hypodd_par.inp"
 
-    ensure_file(pmodel, "P velocity model (velo_p_eg.cre)")
-    ensure_file(smodel, "S velocity model (velo_s_eg.cre)")
+    ensure_file(pmodel, f"P velocity model ({p_model_name})")
+    ensure_file(smodel, f"S velocity model ({s_model_name})")
     ensure_file(t_hypoinv, "HypoInverse template (template_hypoinv_vp-vs.txt)")
     ensure_file(t_ph2dt, "ph2dt template (template_ph2dt_par.inp)")
     ensure_file(t_hypodd, "HypoDD template (template_hypodd_par.inp)")
 
-    # Link/copy into input/ so paths are short (Fortran-friendly)
+    # Link/copy into input/ so paths are short
     link_or_copy(pmodel, indir / pmodel.name)
     link_or_copy(smodel, indir / smodel.name)
     link_or_copy(t_hypoinv, indir / t_hypoinv.name)
     link_or_copy(t_ph2dt, indir / t_ph2dt.name)
     link_or_copy(t_hypodd, indir / t_hypodd.name)
 
-    return indir, outdir
+    return indir, outdir, pmodel.name, smodel.name
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--binpath", required=True, help="Folder containing hyp1.40/hypoinverse + hypoDD + ph2dt binaries")
     ap.add_argument("--namebase", default="GAMMA")
+    ap.add_argument("--p_model", default="velo_p_eg.cre",
+                help="P-wave velocity model filename inside templates_dir")
+    ap.add_argument("--s_model", default="velo_s_eg.cre",
+                    help="S-wave velocity model filename inside templates_dir")
+    ap.add_argument("--ref_ele", type=float, default=3.0,
+                    help="Reference elevation for HypoInverse")
 
     # sensible defaults for your repo layout
     ap.add_argument("--merged_dir", default=None, help="Default: <repo>/data/merged")
@@ -135,10 +142,12 @@ def main():
     merged_dir = Path(args.merged_dir) if args.merged_dir else (repo_root / "data" / "merged")
     templates_dir = Path(args.templates_dir) if args.templates_dir else (repo_root / "hypox_templates")
 
-    indir, outdir = stage_in_merged(
+    indir, outdir, p_model_used, s_model_used = stage_in_merged(
         merged_dir=merged_dir,
         templates_dir=templates_dir,
         namebase=args.namebase,
+        p_model_name=args.p_model,
+        s_model_name=args.s_model,
     )
 
     # Work from merged_dir so we can use short relative paths like the original script
@@ -212,9 +221,9 @@ def main():
         },
 
         "hypoinverse": {
-            "p_model": os.path.join(indir_rel, "velo_p_eg.cre"),
-            "s_model": os.path.join(indir_rel, "velo_s_eg.cre"),
-            "ref_ele": 3.0,
+            "p_model": os.path.join(indir_rel, p_model_used),
+            "s_model": os.path.join(indir_rel, s_model_used),
+            "ref_ele": float(args.ref_ele),
             "depth_list": depth_try_list,
             "min_nsta": args.min_nsta,
             "hypoinv_template": os.path.join(indir_rel, "template_hypoinv_vp-vs.txt"),

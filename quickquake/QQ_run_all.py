@@ -44,6 +44,7 @@ phasenet_min_p_prob = 0.30
 phasenet_min_s_prob = 0.30
 phasenet_mpd        = 50  # minimum peak distance
 
+
 RUN_GAMMA    = False
 # gamma options (user edits )
 gamma_method           = "BGMM"   # default: BGMM
@@ -53,14 +54,23 @@ gamma_max_sigma11      = 2      # S
 gamma_max_sigma22      = 1     #m/s
 gamma_max_sigma12      = 1     #covariance
 
+
+
 RUN_MERGE_GAMMA = True
+
 RUN_LOCATION      =  True
-LOCATION_BINPATH  = "/home/elizabeth/bin"
-LOCATION_NAMEBASE = "GAMMA"
-LOCATION_EXTRA_ARGS = []  # ej: ["--cleanup"]
+location_binpath = "/home/elizabeth/bin"
+location_namebase = "GAMMA"
+location_extra_args = []  # ej: ["--cleanup"]
+location_p_model = "velo_p_eg.cre"
+location_s_model = "velo_s_eg.cre"
+location_ref_ele = 3.0
 location_depth_min = 0.0
 location_depth_max = 20.0
 location_depth_step = 1
+
+
+
 RUN_QC= True
 # qc options (user edits)
 qc_min_total_stations = 3 #must be a positive number 
@@ -209,22 +219,27 @@ def main():
         cmd_merge = [
             sys.executable, str(SCRIPTS["merge"]),
             "--data_root", str(DATA_ROOT),
-            "--namebase", str(LOCATION_NAMEBASE),
+            "--namebase", str(location_namebase),
         ]
         run_step(cmd_merge, "Merge GaMMA outputs", cwd=BASE_DIR)
 
     # 3) Location (as subprocess)
     if RUN_LOCATION:
         cmd_loc = [
-            sys.executable, str(SCRIPTS["location"]),
-            "--merged_dir", str(DATA_ROOT / "merged"),
-            "--templates_dir", str(BASE_DIR / "hypox_templates"),
-            "--binpath", str(LOCATION_BINPATH),
-            "--namebase", str(LOCATION_NAMEBASE),
-             "--depth_min", str(location_depth_min),
-            "--depth_max", str(location_depth_max),
-            "--depth_step", str(location_depth_step),
-        ] + list(LOCATION_EXTRA_ARGS)
+        sys.executable, str(SCRIPTS["location"]),
+        "--merged_dir", str(DATA_ROOT / "merged"),
+        "--templates_dir", str(BASE_DIR / "hypox_templates"),
+        "--binpath", str(location_binpath),
+        "--namebase", str(location_namebase),
+
+        "--p_model", str(location_p_model),
+        "--s_model", str(location_s_model),
+        "--ref_ele", str(location_ref_ele),
+
+        "--depth_min", str(location_depth_min),
+        "--depth_max", str(location_depth_max),
+        "--depth_step", str(location_depth_step),
+    ] + list(location_extra_args)
         run_step(cmd_loc, "HypoXPy relocation (HypoInverse + HypoDD)", cwd=BASE_DIR)
 
 
@@ -235,7 +250,7 @@ def main():
         cmd_qc = [
             sys.executable, str(SCRIPTS["qc_velocity"]),
             "--data_root", str(DATA_ROOT),
-            "--namebase", str(LOCATION_NAMEBASE),
+            "--namebase", str(location_namebase),
 
             "--vmin_curve", str(qc_vmin_curve),
             "--vmax_curve", str(qc_vmax_curve),

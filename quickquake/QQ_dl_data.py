@@ -11,14 +11,23 @@ import time
 import argparse
 import obspy
 from obspy.clients.fdsn import Client
+from obspy.io.mseed import InternalMSEEDError
 
 def download_waveforms(config_json, output_dir):
-    client = Client("IRIS")
+    # INPUT 1: config.json 
+    with open(config_json) as fp:
+        config = json.load(fp)
+
+    # Usa el client definido en config.json (que viene del orquestador).
+    # Si falta la clave "client", cae a IRIS.
+    client_name = config.get("client", "IRIS")
+    client = Client(client_name)
+    print(f"[waveforms] FDSN client = {client_name}")
+
+    # OUTPUT DIR: waveforms/ (creado aquí; PhaseNet lo usa después como --data_dir)
     waveform_dir = os.path.join(output_dir, "waveforms")
     os.makedirs(waveform_dir, exist_ok=True)
 
-    with open(config_json) as fp:
-        config = json.load(fp)
     with open(os.path.join(output_dir, "stations.pkl"), "rb") as fp:
         stations = pickle.load(fp)
 
@@ -44,13 +53,30 @@ def download_waveforms(config_json, output_dir):
                     retry += 1
                     time.sleep(5)
 
+    # if stream:
+    #     stream.write(os.path.join(waveform_dir, fname), format="MSEED")
+    #     print(f'Waveforms saved at: {os.path.join(waveform_dir, fname)}')
+    #     with open(os.path.join(output_dir, "input_data.csv"), "w") as fp:
+    #         fp.write(f"fname\n{fname}\n")
+    # else:
+    #     print('Download failed - Empty Stream')
+
+
+
+
     if stream:
-        stream.write(os.path.join(waveform_dir, fname), format="MSEED")
-        print(f'Waveforms saved at: {os.path.join(waveform_dir, fname)}')
+        outpath = os.path.join(waveform_dir, fname)
+        try:
+            stream.write(outpath, format="MSEED")  # default (STEIM2)
+        except InternalMSEEDError:
+            # fallback robusto: guarda valores crudos, sin STEIM2
+            stream.write(outpath, format="MSEED", encoding="INT32")
+
+        print(f"Waveforms saved at: {outpath}")
         with open(os.path.join(output_dir, "input_data.csv"), "w") as fp:
             fp.write(f"fname\n{fname}\n")
     else:
-        print('Download failed - Empty Stream')
+        print("Download failed - Empty Stream")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -59,4 +85,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     download_waveforms(args.config, args.output_dir)
-

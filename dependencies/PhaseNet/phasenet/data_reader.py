@@ -152,7 +152,7 @@ class DataConfig:
     use_seed = True
     n_channel = 3
     n_class = 3
-    sampling_rate = 50
+    sampling_rate = 100
     dt = 1.0 / sampling_rate
     X_shape = [3000, 1, n_channel]
     Y_shape = [3000, 1, n_class]

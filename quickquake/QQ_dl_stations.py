@@ -11,12 +11,17 @@ import argparse
 from collections import defaultdict
 from obspy.clients.fdsn import Client
 
-def download_stations(config_json, output_dir, plot=True):  
-    client = Client("IRIS")
-    
+def download_stations(config_json, output_dir, plot=True):
+    # INPUT: config.json 
     with open(config_json) as fp:
         config = json.load(fp)
-        
+
+    # Usa el client definido en config.json (que viene del orquestador).
+    # Si por alguna razón no existe la clave "client", cae a "IRIS".
+    client_name = config.get("client", "IRIS")
+    client = Client(client_name)
+    print(f"[stations] FDSN client = {client_name}")
+
     os.makedirs(output_dir, exist_ok=True)
 
     stations = client.get_stations(

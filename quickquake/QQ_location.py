@@ -1,106 +1,257 @@
 #!/usr/bin/env python3
 """
-This code is based on HypoInvPy by xtyangpsp (Xiaotao Yang).
-Original repository: https://github.com/xtyangpsp/HypoInvPy.git
-This code has been modified.
+QuickQuake - HypoXPy relocation (HypoInverse + HypoDD) ONCE using merged GaMMA outputs.
+
+Expected filesystem after QQ_run_all_hypoxpy.py:
+- <repo>/data/merged/gammacatalog_id.csv
+- <repo>/data/merged/gammapicks_id.csv
+- <repo>/data/merged/input/GAMMA_station_list.json  (join from all)
+
+This script will:
+- Create/ensure:
+    <repo>/data/merged/input/
+    <repo>/data/merged/output/
+- Create symlinks inside input/ with the canonical names expected by HypoXPy:
+    input/GAMMA_catalog.csv  -> ../gammacatalog_id.csv
+    input/GAMMA_picks.csv    -> ../gammapicks_id.csv
+- Link/copy velocity models + templates from <repo>/hypox_templates into input/
+- Run hypoxpy.workflow.relocate()
+
+Outputs (in data/merged/output/):
+- <namebase>_hypoinv_good.csv
+- <namebase>_hypodd_catalog.csv
 """
+
 import os
-import glob
-import sys
 import argparse
-import numpy as np
+import shutil
 from pathlib import Path
-from hypoinvpy import core as hc
-from hypoinvpy import utils
 
-def setup_environment(date_dir, vmodel_dir):
-    """Prepare the working environment"""
-    date_dir = Path(date_dir).resolve()
-    vmodel_dir = Path(vmodel_dir).resolve()
-    
-    date_dir.mkdir(parents=True, exist_ok=True)
-    os.chdir(date_dir)
-    
-    input_dir = date_dir/"input"
-    input_dir.mkdir(exist_ok=True)
-    
-    # Limpieza robusta de enlaces/archivos existentes
-    for vfile in ['velo_p_eg.cre', 'velo_s_eg.cre']:
-        link_path = input_dir/vfile
-        target_path = vmodel_dir/vfile
-        
-        # 1. Eliminar cualquier elemento existente
-        if link_path.exists():
-            if link_path.is_symlink() or link_path.is_file():
-                link_path.unlink(missing_ok=True)
-            elif link_path.is_dir():
-                import shutil
-                shutil.rmtree(link_path)
-        
-        # 2. Verificar que el modelo fuente existe
-        if not target_path.exists():
-            raise FileNotFoundError(f"Modelo de velocidad faltante: {target_path}")
-        
-        # 3. Crear enlace simbólico
-        link_path.symlink_to(target_path)
-        print(f"Enlace creado: {link_path} -> {target_path}")
+import numpy as np
+from hypoxpy.workflow import relocate
 
-def main(args):
+
+# 
+# helpers
+# 
+def link_or_copy(src: Path, dst: Path):
+    """
+    Prefer symlink to avoid duplication; fallback to copy (better for systems without symlink perms).
+    Overwrites dst if it exists.
+    """
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
+    if dst.exists() or dst.is_symlink():
+        dst.unlink()
+
     try:
-        setup_environment(args.date_dir, args.vmodel_dir)
-        print(f"\n Processing in: {Path(args.date_dir).resolve()}")
+        dst.symlink_to(src)
+    except OSError:
+        shutil.copy2(src, dst)
 
-        # 1. Station conversion
-        station_json = Path("stations.json")
-        station_ready = Path("input/station_list_ready.sta")
-        hc.reformat_stainfo(str(station_json), str(station_ready), 
-                           informat='json-gamma', ignore_component=False)
 
-        # 2. Picks conversion
-        phase_file = Path("input/pavlof_phases.phs")
-        utils.conv_gamma("gamma_catalog.csv", "gamma_picks.csv",
-                        outfile=str(phase_file), default_component='Z', v=True)
+def ensure_file(path: Path, label: str):
+    if not path.exists():
+        raise FileNotFoundError(f"Missing {label}: {path}")
 
-        # 3. HypoInverse configuration
-        cfg = hc.HypoInvConfig(
-            phase_file = str(phase_file),
-            station_file = str(station_ready),
-            pmodel = "input/velo_p_eg.cre",
-            smodel = "input/velo_s_eg.cre",
-            min_nsta = 4,
-            lat_code = 'N',
-            lon_code = 'W',
-            #ref_ele = -1.0,
-            ztrlist = np.arange(0, 20, 0.1),
-            hypoinv_bin = args.hypo_bin
-        )
 
-        # 4. Generate .hyp files
-        parfiles = hc.generate_parfile(cfg, pardir="input", outdir="output", magline='MAG')
+def stage_in_merged(merged_dir: Path, templates_dir: Path, namebase: str,
+                    p_model_name: str, s_model_name: str):
+    """
+    Work INSIDE merged_dir:
+      merged_dir/input
+      merged_dir/output
 
-        # 5. Run HypoInverse
-        hc.run_hypoinv(parfiles)
+    Create canonical files in input/ expected by HypoXPy.
+    """
+    merged_dir = merged_dir.resolve()
+    templates_dir = templates_dir.resolve()
 
-        # 6. Process results
-        run_tag = cfg.run_tag
-        summary_files = glob.glob(f"output/{run_tag}-*.sum")
-        hc.merge_summary(summary_files, 
-                        f"output/{run_tag}_good.csv",
-                        f"output/{run_tag}_bad.csv",
-                        'N', 'W', mag_dict="gamma_catalog.csv")
+    indir = merged_dir / "input"
+    outdir = merged_dir / "output"
+    indir.mkdir(parents=True, exist_ok=True)
+    outdir.mkdir(parents=True, exist_ok=True)
 
-        print(f"\n Results saved in: {Path(args.date_dir).resolve()}/output")
-        print(f"- Good events: {run_tag}_good.csv")
-        print(f"- Bad events: {run_tag}_bad.csv")
+    # merged CSVs produced by your merge step
+    cat_src = merged_dir / "gammacatalog_id.csv"
+    picks_src = merged_dir / "gammapicks_id.csv"
+    ensure_file(cat_src, "merged catalog (gammacatalog_id.csv)")
+    ensure_file(picks_src, "merged picks (gammapicks_id.csv)")
 
-    except Exception as e:
-        print(f"\n Error: {str(e)}")
-        sys.exit(1)
+    # station list should have been copied by run_all into merged/input/
+    station_src = indir / f"{namebase}_station_list.json"
+    ensure_file(station_src, "station list JSON in merged/input")
+
+    # Create canonical names expected by HypoXPy example workflow
+    link_or_copy(cat_src, indir / f"{namebase}_catalog.csv")
+    link_or_copy(picks_src, indir / f"{namebase}_picks.csv")
+
+    # Velocity models + templates live in repo/hypox_templates
+    pmodel = templates_dir / p_model_name
+    smodel = templates_dir / s_model_name
+    t_hypoinv = templates_dir / "template_hypoinv_vp-vs.txt"
+    t_ph2dt = templates_dir / "template_ph2dt_par.inp"
+    t_hypodd = templates_dir / "template_hypodd_par.inp"
+
+    ensure_file(pmodel, f"P velocity model ({p_model_name})")
+    ensure_file(smodel, f"S velocity model ({s_model_name})")
+    ensure_file(t_hypoinv, "HypoInverse template (template_hypoinv_vp-vs.txt)")
+    ensure_file(t_ph2dt, "ph2dt template (template_ph2dt_par.inp)")
+    ensure_file(t_hypodd, "HypoDD template (template_hypodd_par.inp)")
+
+    # Link/copy into input/ so paths are short
+    link_or_copy(pmodel, indir / pmodel.name)
+    link_or_copy(smodel, indir / smodel.name)
+    link_or_copy(t_hypoinv, indir / t_hypoinv.name)
+    link_or_copy(t_ph2dt, indir / t_ph2dt.name)
+    link_or_copy(t_hypodd, indir / t_hypodd.name)
+
+    return indir, outdir, pmodel.name, smodel.name
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--binpath", required=True, help="Folder containing hyp1.40/hypoinverse + hypoDD + ph2dt binaries")
+    ap.add_argument("--namebase", default="GAMMA")
+    ap.add_argument("--p_model", default="velo_p_eg.cre",
+                help="P-wave velocity model filename inside templates_dir")
+    ap.add_argument("--s_model", default="velo_s_eg.cre",
+                    help="S-wave velocity model filename inside templates_dir")
+    ap.add_argument("--ref_ele", type=float, default=3.0,
+                    help="Reference elevation for HypoInverse")
+
+    # sensible defaults for your repo layout
+    ap.add_argument("--merged_dir", default=None, help="Default: <repo>/data/merged")
+    ap.add_argument("--templates_dir", default=None, help="Default: <repo>/hypox_templates")
+
+    ap.add_argument("--min_nsta", type=int, default=4)
+    ap.add_argument("--depth_min", type=float, default=0.0)
+    ap.add_argument("--depth_max", type=float, default=20.0)
+    ap.add_argument("--depth_step", type=float, default=1.0)
+
+    ap.add_argument("--dep_corr", type=float, default=0.0)
+    ap.add_argument("--cleanup", action="store_true")
+    ap.add_argument("--qc_phase", action="store_true")  # default False
+    ap.add_argument("--skip_hypoinverse", action="store_true")
+    ap.add_argument("--skip_hypodd", action="store_true")
+    args = ap.parse_args()
+
+    # repo root inferred from this file: <repo>/quickquake/QQ_location_hypoxpy.py
+    repo_root = Path(__file__).resolve().parent.parent
+
+    merged_dir = Path(args.merged_dir) if args.merged_dir else (repo_root / "data" / "merged")
+    templates_dir = Path(args.templates_dir) if args.templates_dir else (repo_root / "hypox_templates")
+
+    indir, outdir, p_model_used, s_model_used = stage_in_merged(
+        merged_dir=merged_dir,
+        templates_dir=templates_dir,
+        namebase=args.namebase,
+        p_model_name=args.p_model,
+        s_model_name=args.s_model,
+    )
+
+    # Work from merged_dir so we can use short relative paths like the original script
+    os.chdir(merged_dir)
+
+    depth_try_list = np.arange(args.depth_min, args.depth_max + 1e-9, args.depth_step)
+
+    # Short relative paths (exactly the style of the original)
+    indir_rel = "input"
+    outdir_rel = "output"
+    namebase = args.namebase
+
+    station_file = os.path.join(indir_rel, f"{namebase}_station_list.json")         # input/GAMMA_station_list.json
+    station_file_hypoinv = os.path.join(indir_rel, f"{namebase}_station_hypoinv.dat")
+    station_file_hypodd = os.path.join(indir_rel, f"{namebase}_station_hypodd.dat")
+
+    event_file = os.path.join(indir_rel, f"{namebase}_catalog.csv")                # input/GAMMA_catalog.csv
+    phase_file = os.path.join(indir_rel, f"{namebase}_picks.csv")                  # input/GAMMA_picks.csv
+
+    phase_hypoinv = os.path.join(indir_rel, f"{namebase}_phase_hypoinv.pha")
+    phase_hypodd = os.path.join(indir_rel, f"{namebase}_phase_hypodd.pha")
+
+    out_hypoinv_bad = os.path.join(outdir_rel, f"{namebase}_hypoinv_bad.csv")
+    out_hypoinv_good = os.path.join(outdir_rel, f"{namebase}_hypoinv_good.csv")
+    out_hypodd_final = os.path.join(outdir_rel, f"{namebase}_hypodd_catalog.csv")
+
+    cleaned_eventfile = os.path.join(indir_rel, f"{namebase}_catalog_cleaned.csv")
+    cleaned_pickfile = os.path.join(indir_rel, f"{namebase}_picks_cleaned.csv")
+
+    hypox_pars = {
+        "paths": {
+            "binpath": args.binpath,
+            "indir": indir_rel,
+            "outdir": outdir_rel,
+            "namebase": namebase,
+        },
+
+        "preprocess": {
+            "save_cleaned_data": True,
+            "cleaned_eventfile": cleaned_eventfile,
+            "cleaned_pickfile": cleaned_pickfile,
+            "combine_net_sta": True,
+            "cleanup": args.cleanup,
+            "qc_phase": args.qc_phase,
+        },
+
+        # Your event_id is not integer -> mapping must be True
+        "event_id": {
+            "evid_label": "event_id",
+            "mapping_evid": True,
+            "evid_label_mapped": "event_id_mapped",
+        },
+
+        "files": {
+            "stations": {
+                "json": station_file,
+                "hypoinv": station_file_hypoinv,
+                "hypodd": station_file_hypodd,
+            },
+            "events": event_file,
+            "phases": {
+                "raw": phase_file,
+                "hypoinv": phase_hypoinv,
+                "hypodd": phase_hypodd,
+            },
+            "final_catalogs": {
+                "hypoinv_bad": out_hypoinv_bad,
+                "hypoinv_good": out_hypoinv_good,
+                "hypodd_final": out_hypodd_final,
+            },
+        },
+
+        "hypoinverse": {
+            "p_model": os.path.join(indir_rel, p_model_used),
+            "s_model": os.path.join(indir_rel, s_model_used),
+            "ref_ele": float(args.ref_ele),
+            "depth_list": depth_try_list,
+            "min_nsta": args.min_nsta,
+            "hypoinv_template": os.path.join(indir_rel, "template_hypoinv_vp-vs.txt"),
+        },
+
+        "hypodd": {
+            "dep_corr": float(args.dep_corr), # 0.0
+            "ph2dt_template": os.path.join(indir_rel, "template_ph2dt_par.inp"),
+            "hypodd_template": os.path.join(indir_rel, "template_hypodd_par.inp"),
+        },
+    }
+
+    relocate(
+        hypox_pars,
+        input_type="gamma",
+        skip_hypoinverse=args.skip_hypoinverse,
+        skip_hypodd=args.skip_hypodd,
+        allow_skip_hypoinverse=False,
+        verbose=True,
+    )
+
+    print("\n Relocation terminado.")
+    print(f"   Working dir : {merged_dir}")
+    print(f"   Input dir   : {indir}")
+    print(f"   Output dir  : {outdir}")
+    print(f"   HypoInv good: {merged_dir / out_hypoinv_good}")
+    print(f"   HypoDD final: {merged_dir / out_hypodd_final}")
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--date_dir', required=True)
-    parser.add_argument('--vmodel_dir', required=True)
-    parser.add_argument('--hypo_bin', required=True)
-    args = parser.parse_args()
-    main(args)
+    main()

@@ -46,7 +46,7 @@ if __name__ == "__main__":
     parser.add_argument("--start", required=True, help="Initial date (e.g., 2021-09-25T00:00:00)")
     parser.add_argument("--end", required=True, help="End date (e.g., 2021-09-26T00:00:00)")
     parser.add_argument("--output", required=True, help="Output config.json path (e.g., data_root/20210925/config.json)")
-    parser.add_argument("--center", required=True, help="Center coordinate as lat,lon (e.g., -161.8903,55.4133)")
+    parser.add_argument("--center", required=True, help="Center coordinate as lon,lat (e.g., -161.8903,55.4133)")
     parser.add_argument("--deg", required=True, type=float, help="Degree span (e.g., 1.0)")
     parser.add_argument("--networks", required=True, help="Comma separated networks (e.g., AV)")
     parser.add_argument("--channels", required=True, help="Comma separated channels (e.g., BHZ,BHN,BHE,SHZ,SHN,SHE)")

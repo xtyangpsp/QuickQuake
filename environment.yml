@@ -3,20 +3,32 @@ channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.9
-  - numpy=1.23.5          # Version compatible with TensorFlow
-  - tensorflow=2.14.0     # CPU or GPU depending on your hardware
-  - scikit-learn=1.2.2    # Stable version for Gamma
-  - pandas=2.0.3
-  - obspy=1.4.0
-  - cartopy=0.21.1        # For map visualization
-  - mpi4py=3.1.4          # Required by HypoInvPy
-  - gfortran              # Compiler for HypoInverse
-  - pip=23.1.2
-  - pip:
-    - hypoinvpy==0.7.0    # Stable version of HypoInvPy
-    - -e dependencies/PhaseNet  # Editable installation from your repository
-    - -e dependencies/GaMMA     # Editable installation from your repository
-    - pyproj==3.6.0       # Required by cartopy
-    - geographiclib==2.0  # Required by cartopy
+  - python=3.10
+  - pip
 
+  # Core científico
+  - numpy=1.25.*
+  - scipy
+  - pandas
+  - matplotlib
+  - scikit-learn
+  - obspy=1.4.0
+  - pyproj
+  - h5py
+  - pyyaml
+  - tqdm
+  - requests
+  - fsspec
+
+  # PhaseNet (CPU)
+  - tensorflow=2.14.*=*cpu*
+  - tensorboard=2.14.*
+
+  # Pip: SOLO lo imprescindible (sin seisgo/seisbench)
+  - pip:
+      - hypoinvpy==0.7.0
+      - hypoxpy==0.1.0
+      - pyasdf==0.8.1
+      - pycwt==0.4.0b0
+      - kneed==0.8.5
+      - plotly==6.0.1

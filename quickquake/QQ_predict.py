@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
 
-import sys
-sys.path.append("/home/elizabeth/soft/src/QuickQuake/dependencies/PhaseNet/phasenet")
-
 #THIS ENTIRE CODE BELONGS TO THE PHASENET AUTHOR. THIS PYTHON FILE IS HERE FOR THE PURPOSE OF MAKING THE DETECTION PROCESS EASIER TO PERFORM.
 
 """
@@ -25,9 +22,10 @@ import h5py
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-from data_reader import DataReader_mseed_array, DataReader_pred
-from model import ModelConfig, UNet
-from postprocess import (
+
+from phasenet.data_reader import DataReader_mseed_array, DataReader_pred
+from phasenet.model import ModelConfig, UNet
+from phasenet.postprocess import (
     extract_amplitude,
     extract_picks,
     save_picks,
@@ -35,7 +33,7 @@ from postprocess import (
     save_prob_h5,
 )
 from tqdm import tqdm
-from visulization import plot_waveform
+from phasenet.visulization import plot_waveform
 
 tf.compat.v1.disable_eager_execution()
 tf.compat.v1.logging.set_verbosity(tf.compat.v1.logging.ERROR)
@@ -59,7 +57,7 @@ def read_args():
     parser.add_argument("--result_fname", default="picks", help="Output file")
     parser.add_argument("--min_p_prob", default=0.3, type=float, help="Probability threshold for P pick")
     parser.add_argument("--min_s_prob", default=0.3, type=float, help="Probability threshold for S pick")
-    parser.add_argument("--mpd", default=30, type=float, help="Minimum peak distance")
+    parser.add_argument("--mpd", default=50, type=float, help="Minimum peak distance")
     parser.add_argument("--amplitude", action="store_true", help="if return amplitude value")
     parser.add_argument("--format", default="numpy", help="input format")
     parser.add_argument("--s3_url", default="localhost:9000", help="s3 url")
@@ -69,10 +67,10 @@ def read_args():
     parser.add_argument("--pre_sec", default=1, type=float, help="Window length before pick")
     parser.add_argument("--post_sec", default=4, type=float, help="Window length after pick")
 
-    parser.add_argument("--highpass_filter", default=0 , type=float, help="Highpass filter")
+    parser.add_argument("--highpass_filter", default=0.0 , type=float, help="Highpass filter")
     parser.add_argument("--response_xml", default=None, type=str, help="response xml file")
 
-    parser.add_argument("--sampling_rate", default=50, type=float, help="sampling rate")
+    parser.add_argument("--sampling_rate", default=100, type=float, help="sampling rate")
     args = parser.parse_args()
 
     return args

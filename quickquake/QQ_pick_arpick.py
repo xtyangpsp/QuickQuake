@@ -18,7 +18,7 @@ Design choices
 --------------
 - Runs AFTER QQ_merge_gamma_outputs.py and BEFORE QQ_location.py
 - Uses existing merged `event_id` convention from merge script
-- Processes only associated picks that have a valid `event_id`
+- Processes only associated picks that have a valid event_id AND event_idx >= 0
 - Groups by (event_id, station id) so ar_pick is run once per station/event pair
 - Leaves original pick untouched if:
     * waveform is missing
@@ -218,7 +218,7 @@ def prepare_three_components(
     # resample to lowest sampling rate if needed
     srs = [float(tr.stats.sampling_rate) for tr in trs]
     sr = min(srs)
-    for i, tr in enumerate(trs):
+    for tr in trs:
         if abs(float(tr.stats.sampling_rate) - sr) > 1e-6:
             tr.resample(sr)
 
@@ -266,25 +266,22 @@ def infer_chunk_id_from_event_id(event_id: str) -> Optional[str]:
     return s.rsplit("_", 1)[0]
 
 
-def infer_chunk_id_from_timestamp(ts: pd.Timestamp) -> Optional[str]:
-    """
-    Fallback only if needed. This is less exact than event_id-based routing.
-    """
-    if pd.isna(ts):
-        return None
-    return pd.Timestamp(ts).strftime("%Y%m%dT%H0000")
-
-
 def normalize_type(val: str) -> str:
     s = str(val).strip().lower()
-    if s in {"p", "P"}:
+    if s == "p":
         return "p"
-    if s in {"s", "S"}:
+    if s == "s":
         return "s"
     return s
 
 
-def choose_group_window(g: pd.DataFrame, pre_p: float, post_p: float, pre_s: float, post_s: float) -> Tuple[UTCDateTime, UTCDateTime]:
+def choose_group_window(
+    g: pd.DataFrame,
+    pre_p: float,
+    post_p: float,
+    pre_s: float,
+    post_s: float
+) -> Tuple[UTCDateTime, UTCDateTime]:
     """
     Build one local waveform window per (event_id, station id).
     """
@@ -302,7 +299,6 @@ def choose_group_window(g: pd.DataFrame, pre_p: float, post_p: float, pre_s: flo
             tmaxs.append(t + float(post_s))
 
     if not tmins:
-        # should not happen because caller filters P/S
         t0 = UTCDateTime(pd.Timestamp(g.iloc[0]["timestamp"]).to_pydatetime())
         return t0 - 1.0, t0 + 2.0
 
@@ -351,14 +347,24 @@ def run_arpick_on_group(
     chunk_id = infer_chunk_id_from_event_id(event_id)
     if chunk_id is None:
         for idx in g.index:
-            out[idx] = {"new_timestamp": g.loc[idx, "timestamp"], "dt": np.nan, "used": False, "status": "no_chunk_id"}
+            out[idx] = {
+                "new_timestamp": g.loc[idx, "timestamp"],
+                "dt": np.nan,
+                "used": False,
+                "status": "no_chunk_id"
+            }
         return out
 
     chunk_dir = data_root / chunk_id
     st_chunk = cache.get_chunk_stream(chunk_dir)
     if st_chunk is None:
         for idx in g.index:
-            out[idx] = {"new_timestamp": g.loc[idx, "timestamp"], "dt": np.nan, "used": False, "status": "no_waveforms"}
+            out[idx] = {
+                "new_timestamp": g.loc[idx, "timestamp"],
+                "dt": np.nan,
+                "used": False,
+                "status": "no_waveforms"
+            }
         return out
 
     t_start, t_end = choose_group_window(g, pre_p, post_p, pre_s, post_s)
@@ -373,7 +379,12 @@ def run_arpick_on_group(
     )
     if prepared is None:
         for idx in g.index:
-            out[idx] = {"new_timestamp": g.loc[idx, "timestamp"], "dt": np.nan, "used": False, "status": "missing_3c"}
+            out[idx] = {
+                "new_timestamp": g.loc[idx, "timestamp"],
+                "dt": np.nan,
+                "used": False,
+                "status": "missing_3c"
+            }
         return out
 
     a, b, c, sr, trace_start = prepared
@@ -390,7 +401,12 @@ def run_arpick_on_group(
         )
     except Exception:
         for idx in g.index:
-            out[idx] = {"new_timestamp": g.loc[idx, "timestamp"], "dt": np.nan, "used": False, "status": "arpick_failed"}
+            out[idx] = {
+                "new_timestamp": g.loc[idx, "timestamp"],
+                "dt": np.nan,
+                "used": False,
+                "status": "arpick_failed"
+            }
         return out
 
     p_abs = trace_start + float(p_rel) if np.isfinite(p_rel) else None
@@ -448,19 +464,30 @@ def main():
     ensure_file(picks_in, "input merged picks CSV")
 
     picks = pd.read_csv(picks_in)
-    if "timestamp" not in picks.columns:
-        raise ValueError(f"Missing 'timestamp' column in {picks_in}")
-    if "id" not in picks.columns:
-        raise ValueError(f"Missing 'id' column in {picks_in}")
-    if "type" not in picks.columns:
-        raise ValueError(f"Missing 'type' column in {picks_in}")
-    if "event_id" not in picks.columns:
-        raise ValueError(f"Missing 'event_id' column in {picks_in}")
 
-    # preserve original order
+    required_cols = ["id", "timestamp", "type", "event_idx", "event_id"]
+    missing = [c for c in required_cols if c not in picks.columns]
+    if missing:
+        raise ValueError(f"Missing required columns in {picks_in}: {missing}")
+
+    # Keep only columns already present in your original merged file.
+    # No extra helper columns are kept permanently.
     picks = picks.copy()
     picks["timestamp"] = pd.to_datetime(picks["timestamp"], utc=True, errors="coerce", format="mixed")
 
+    # Filter ONLY picks that should feed location:
+    # - valid event_id
+    # - valid event_idx
+    # - event_idx >= 0  (skip all -1)
+    # - phase is P or S
+    event_idx_num = pd.to_numeric(picks["event_idx"], errors="coerce")
+    phase_norm = picks["type"].astype(str).str.strip().str.lower()
+
+    mask_assoc = picks["event_id"].notna() & event_idx_num.notna() & (event_idx_num >= 0)
+    mask_phase = phase_norm.isin(["p", "s"])
+    todo = picks.loc[mask_assoc & mask_phase].copy()
+
+    # Output dataframe starts as exact copy of original
     out_df = picks.copy()
 
     if args.keep_debug_cols:
@@ -468,10 +495,6 @@ def main():
         out_df["dt_arpick_s"] = np.nan
         out_df["arpick_used"] = False
         out_df["arpick_status"] = "not_processed"
-
-    mask_assoc = out_df["event_id"].notna()
-    mask_phase = out_df["type"].astype(str).str.lower().isin(["p", "s"])
-    todo = out_df[mask_assoc & mask_phase].copy()
 
     cache = StreamCache()
 
@@ -481,7 +504,7 @@ def main():
 
     grouped = todo.groupby(["event_id", "id"], sort=False)
 
-    for (_, _), g in grouped:
+    for _, g in grouped:
         n_groups += 1
         n_rows_considered += len(g)
 
@@ -520,9 +543,12 @@ def main():
         if n_groups % 200 == 0:
             print(f"[ar_pick] processed {n_groups} station-event groups")
 
-    # keep output compatible
-    # by default preserve original columns only
-    if not args.keep_debug_cols:
+    # Keep output compatible and clean
+    if args.keep_debug_cols:
+        debug_cols = ["timestamp_original", "dt_arpick_s", "arpick_used", "arpick_status"]
+        base_cols = [c for c in picks.columns]
+        out_df = out_df[base_cols + debug_cols]
+    else:
         out_df = out_df[picks.columns.tolist()]
 
     picks_out.parent.mkdir(parents=True, exist_ok=True)
@@ -540,6 +566,7 @@ def main():
     print(f"Rows updated by ar_pick  : {n_rows_updated}")
     if n_rows_considered > 0:
         print(f"Update fraction          : {100.0 * n_rows_updated / n_rows_considered:.2f}%")
+
 
 if __name__ == "__main__":
     main()

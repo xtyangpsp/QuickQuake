@@ -101,10 +101,11 @@ qc_min_valid_stations_per_v = None  # None => defaults to qc_min_total_stations
 qc_vmin_curve   = 2.0
 qc_vmax_curve   = 8.0
 qc_vsteps_curve = 150
-qc_winlen = 1
+qc_winlen = 3
 qc_noise_percentile  = 50.0
 qc_signal_percentile = 90.0
 qc_min_ratio = 2.0 
+qc_energy_type = "squared_median" # other option is "envelope_median" or "squared_median"
 qc_make_plot = False
 qc_max_plots = 50 #None change 
 
@@ -319,6 +320,7 @@ def main():
             "--vsteps_curve", str(qc_vsteps_curve),
 
             "--winlen", str(qc_winlen),
+            "--energy_type", str(qc_energy_type),
             "--min_total_stations", str(qc_min_total_stations),
 
             "--noise_percentile", str(qc_noise_percentile),

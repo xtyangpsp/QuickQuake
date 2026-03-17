@@ -2,49 +2,28 @@
 """
 QuickQuake - lightweight P/S pick refinement with ObsPy ar_pick
 
-Goal
-----
-Read merged GaMMA picks from:
-    data/merged/gammapicks_id.csv
+Robust version for large runs on macOS / long catalogs:
+- keeps the SAME repick logic and SAME acceptance rules
+- isolates processing by chunk in short-lived subprocesses
+- avoids long-lived native-memory accumulation/corruption
 
-and write ONE compatible output file, by default:
-    data/merged/gammapicks_id_arpick.csv
-
-This script keeps the original column structure as much as possible and only
-updates the `timestamp` column for associated P/S picks when a local ar_pick
-repick is successful and passes simple sanity thresholds.
-
-Design choices
---------------
-- Runs AFTER QQ_merge_gamma_outputs.py and BEFORE QQ_location.py
-- Uses existing merged `event_id` convention from merge script
-- Processes only associated picks that have a valid event_id AND event_idx >= 0
-- Groups by (event_id, station id) so ar_pick is run once per station/event pair
-- Leaves original pick untouched if:
-    * waveform is missing
-    * Z/N/E are incomplete
-    * ar_pick fails
-    * dt exceeds the allowed threshold
-- Writes only one new CSV by default
-
-Memory/stability notes
-----------------------
-This version is written to preserve the original output logic while being safer
-for large runs:
-- caches only ONE chunk stream at a time instead of all chunks ever seen
-- sorts work by chunk_id to maximize cache reuse
-- explicitly releases temporary objects during long loops
-
-These changes should not alter scientific results; they only reduce memory use.
+Default behavior:
+    input : <data_root>/merged/gammapicks_id.csv
+    output: <data_root>/merged/gammapicks_id_arpick.csv
 """
 
 from __future__ import annotations
 
 import argparse
 import gc
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 import warnings
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -56,7 +35,7 @@ warnings.filterwarnings("ignore", category=RuntimeWarning)
 
 
 # ============================================================
-# I/O helpers
+# basic helpers
 # ============================================================
 
 def ensure_file(path: Path, label: str):
@@ -64,9 +43,49 @@ def ensure_file(path: Path, label: str):
         raise FileNotFoundError(f"Missing {label}: {path}")
 
 
+def normalize_type(val: str) -> str:
+    s = str(val).strip().lower()
+    if s == "p":
+        return "p"
+    if s == "s":
+        return "s"
+    return s
+
+
+def infer_chunk_id_from_event_id(event_id: str) -> Optional[str]:
+    """
+    merge script builds event_id as:
+        <window_id>_<event_idx>
+    where window_id = chunk folder name
+    """
+    if pd.isna(event_id):
+        return None
+    s = str(event_id)
+    if "_" not in s:
+        return None
+    return s.rsplit("_", 1)[0]
+
+
+def parse_sid(sid: str) -> Tuple[str, str, str, str]:
+    """
+    Expected sid style:
+        NET.STA.LOC.PREFIX
+    e.g. AV.DT1..BH
+    """
+    parts = str(sid).split(".")
+    if len(parts) < 4:
+        raise ValueError(f"Station id '{sid}' does not look like NET.STA.LOC.PREFIX")
+    net, sta, loc, chprefix = parts[0], parts[1], parts[2], parts[3]
+    return net, sta, loc, chprefix
+
+
+# ============================================================
+# argument parsing
+# ============================================================
+
 def parse_args():
     ap = argparse.ArgumentParser(
-        description="Refine merged GaMMA picks with ObsPy ar_pick and write one compatible CSV."
+        description="Refine merged GaMMA picks with ObsPy ar_pick."
     )
     ap.add_argument("--data_root", type=str, required=True,
                     help="QuickQuake data root, e.g. /path/to/QuickQuake/data")
@@ -78,26 +97,18 @@ def parse_args():
                     help="Optional output picks CSV. Default: <data_root>/merged/gammapicks_id_arpick.csv")
 
     # local windows around existing picks
-    ap.add_argument("--pre_p", type=float, default=1.0,
-                    help="Seconds before original P pick to include in local repick window")
-    ap.add_argument("--post_p", type=float, default=2.0,
-                    help="Seconds after original P pick to include in local repick window")
-    ap.add_argument("--pre_s", type=float, default=1.5,
-                    help="Seconds before original S pick to include in local repick window")
-    ap.add_argument("--post_s", type=float, default=3.0,
-                    help="Seconds after original S pick to include in local repick window")
+    ap.add_argument("--pre_p", type=float, default=1.0)
+    ap.add_argument("--post_p", type=float, default=2.0)
+    ap.add_argument("--pre_s", type=float, default=1.5)
+    ap.add_argument("--post_s", type=float, default=3.0)
 
     # acceptance thresholds
-    ap.add_argument("--max_dt_p", type=float, default=0.30,
-                    help="Maximum allowed absolute correction for P picks in seconds")
-    ap.add_argument("--max_dt_s", type=float, default=0.50,
-                    help="Maximum allowed absolute correction for S picks in seconds")
+    ap.add_argument("--max_dt_p", type=float, default=0.30)
+    ap.add_argument("--max_dt_s", type=float, default=0.50)
 
     # preprocessing for ar_pick
-    ap.add_argument("--freqmin", type=float, default=1.0,
-                    help="Bandpass low corner before ar_pick")
-    ap.add_argument("--freqmax", type=float, default=15.0,
-                    help="Bandpass high corner before ar_pick")
+    ap.add_argument("--freqmin", type=float, default=1.0)
+    ap.add_argument("--freqmax", type=float, default=15.0)
 
     # ar_pick parameters
     ap.add_argument("--lta_p", type=float, default=1.0)
@@ -111,9 +122,16 @@ def parse_args():
 
     # behavior
     ap.add_argument("--keep_debug_cols", action="store_true",
-                    help="If set, append a few lightweight diagnostic columns to the output CSV")
+                    help="If set, append lightweight diagnostic columns to the final CSV")
     ap.add_argument("--log_every", type=int, default=200,
-                    help="Print progress every N station-event groups (default: 200)")
+                    help="Print progress every N station-event groups in worker mode")
+
+    # internal worker mode
+    ap.add_argument("--worker_chunk_id", type=str, default=None,
+                    help=argparse.SUPPRESS)
+    ap.add_argument("--worker_out", type=str, default=None,
+                    help=argparse.SUPPRESS)
+
     return ap.parse_args()
 
 
@@ -121,72 +139,32 @@ def parse_args():
 # waveform helpers
 # ============================================================
 
-class StreamCache:
-    """
-    Cache only ONE merged stream per chunk/window folder.
+def load_chunk_stream(chunk_dir: Path) -> Optional[obspy.Stream]:
+    wdir = chunk_dir / "waveforms"
+    if not wdir.exists():
+        return None
 
-    This preserves the original chunk-loading behavior but avoids unbounded
-    memory growth when thousands of chunks are processed.
-    """
-    def __init__(self):
-        self._key: Optional[str] = None
-        self._stream: Optional[obspy.Stream] = None
+    files = sorted(wdir.glob("*.mseed"))
+    if not files:
+        return None
 
-    def get_chunk_stream(self, chunk_dir: Path) -> Optional[obspy.Stream]:
-        key = str(chunk_dir.resolve())
-        if self._key == key:
-            return self._stream
-
-        # release previous cached stream before loading a new one
-        self._key = None
-        self._stream = None
-        gc.collect()
-
-        wdir = chunk_dir / "waveforms"
-        if not wdir.exists():
-            return None
-
-        files = sorted(wdir.glob("*.mseed"))
-        if not files:
-            return None
-
-        st = None
-        for fp in files:
-            try:
-                s = read(str(fp))
-                st = s if st is None else (st + s)
-            except Exception:
-                pass
-
-        if st is None:
-            return None
-
+    st = None
+    for fp in files:
         try:
-            st.merge(fill_value="interpolate")
+            s = read(str(fp))
+            st = s if st is None else (st + s)
         except Exception:
             pass
 
-        self._key = key
-        self._stream = st
-        return self._stream
+    if st is None or len(st) == 0:
+        return None
 
-    def clear(self):
-        self._key = None
-        self._stream = None
-        gc.collect()
+    try:
+        st.merge(fill_value="interpolate")
+    except Exception:
+        pass
 
-
-def parse_sid(sid: str) -> Tuple[str, str, str, str]:
-    """
-    Expected sid style from your pipeline:
-        NET.STA.LOC.PREFIX
-    e.g. AV.DT1..BH
-    """
-    parts = str(sid).split(".")
-    if len(parts) < 4:
-        raise ValueError(f"Station id '{sid}' does not look like NET.STA.LOC.PREFIX")
-    net, sta, loc, chprefix = parts[0], parts[1], parts[2], parts[3]
-    return net, sta, loc, chprefix
+    return st
 
 
 def pick_trace_by_component(st: obspy.Stream, sid: str, comp: str) -> Optional[obspy.Trace]:
@@ -234,6 +212,7 @@ def prepare_three_components(
         return None
 
     trs = [tr_z, tr_n, tr_e]
+
     for tr in trs:
         tr.trim(t_start, t_end, pad=True, fill_value=0)
         tr.detrend("demean")
@@ -242,6 +221,7 @@ def prepare_three_components(
     # resample to lowest sampling rate if needed
     srs = [float(tr.stats.sampling_rate) for tr in trs]
     sr = min(srs)
+
     for tr in trs:
         if abs(float(tr.stats.sampling_rate) - sr) > 1e-6:
             tr.resample(sr)
@@ -261,6 +241,7 @@ def prepare_three_components(
         for tr in trs:
             tr.filter("bandpass", freqmin=fmin, freqmax=fmax, corners=4, zerophase=True)
 
+    # keep dtype/logic same as before
     a = trs[0].data.astype(np.float64)
     b = trs[1].data.astype(np.float64)
     c = trs[2].data.astype(np.float64)
@@ -269,38 +250,13 @@ def prepare_three_components(
     if not (np.any(np.isfinite(a)) and np.any(np.isfinite(b)) and np.any(np.isfinite(c))):
         return None
 
-    # explicit cleanup of trace objects
     del tr_z, tr_n, tr_e, trs
-
     return a, b, c, sr, trace_start
 
 
 # ============================================================
 # repick core
 # ============================================================
-
-def infer_chunk_id_from_event_id(event_id: str) -> Optional[str]:
-    """
-    merge script builds event_id as:
-        <window_id>_<event_idx>
-    where window_id = chunk folder name
-    """
-    if pd.isna(event_id):
-        return None
-    s = str(event_id)
-    if "_" not in s:
-        return None
-    return s.rsplit("_", 1)[0]
-
-
-def normalize_type(val: str) -> str:
-    s = str(val).strip().lower()
-    if s == "p":
-        return "p"
-    if s == "s":
-        return "s"
-    return s
-
 
 def choose_group_window(
     g: pd.DataFrame,
@@ -334,8 +290,7 @@ def choose_group_window(
 
 def run_arpick_on_group(
     g: pd.DataFrame,
-    data_root: Path,
-    cache: StreamCache,
+    st_chunk: obspy.Stream,
     *,
     pre_p: float,
     post_p: float,
@@ -369,30 +324,6 @@ def run_arpick_on_group(
     """
     out = {}
     sid = str(g.iloc[0]["id"])
-    event_id = g.iloc[0]["event_id"]
-
-    chunk_id = infer_chunk_id_from_event_id(event_id)
-    if chunk_id is None:
-        for idx in g.index:
-            out[idx] = {
-                "new_timestamp": g.loc[idx, "timestamp"],
-                "dt": np.nan,
-                "used": False,
-                "status": "no_chunk_id"
-            }
-        return out
-
-    chunk_dir = data_root / chunk_id
-    st_chunk = cache.get_chunk_stream(chunk_dir)
-    if st_chunk is None:
-        for idx in g.index:
-            out[idx] = {
-                "new_timestamp": g.loc[idx, "timestamp"],
-                "dt": np.nan,
-                "used": False,
-                "status": "no_waveforms"
-            }
-        return out
 
     t_start, t_end = choose_group_window(g, pre_p, post_p, pre_s, post_s)
 
@@ -404,13 +335,15 @@ def run_arpick_on_group(
         freqmin=freqmin,
         freqmax=freqmax,
     )
+
     if prepared is None:
         for idx in g.index:
             out[idx] = {
+                "row_index": int(idx),
                 "new_timestamp": g.loc[idx, "timestamp"],
                 "dt": np.nan,
                 "used": False,
-                "status": "missing_3c"
+                "status": "missing_3c",
             }
         return out
 
@@ -429,10 +362,11 @@ def run_arpick_on_group(
     except Exception:
         for idx in g.index:
             out[idx] = {
+                "row_index": int(idx),
                 "new_timestamp": g.loc[idx, "timestamp"],
                 "dt": np.nan,
                 "used": False,
-                "status": "arpick_failed"
+                "status": "arpick_failed",
             }
         del a, b, c
         return out
@@ -450,6 +384,7 @@ def run_arpick_on_group(
             dt = float(new_utc - old_utc)
             ok = abs(dt) <= float(max_dt_p)
             out[idx] = {
+                "row_index": int(idx),
                 "new_timestamp": pd.Timestamp(new_utc.datetime, tz="UTC"),
                 "dt": dt,
                 "used": bool(ok),
@@ -460,6 +395,7 @@ def run_arpick_on_group(
             dt = float(new_utc - old_utc)
             ok = abs(dt) <= float(max_dt_s)
             out[idx] = {
+                "row_index": int(idx),
                 "new_timestamp": pd.Timestamp(new_utc.datetime, tz="UTC"),
                 "dt": dt,
                 "used": bool(ok),
@@ -467,6 +403,7 @@ def run_arpick_on_group(
             }
         else:
             out[idx] = {
+                "row_index": int(idx),
                 "new_timestamp": old_ts,
                 "dt": np.nan,
                 "used": False,
@@ -478,18 +415,10 @@ def run_arpick_on_group(
 
 
 # ============================================================
-# main
+# dataframe helpers
 # ============================================================
 
-def main():
-    args = parse_args()
-
-    data_root = Path(args.data_root).resolve()
-    merged_dir = data_root / "merged"
-
-    picks_in = Path(args.picks_in).resolve() if args.picks_in else (merged_dir / "gammapicks_id.csv")
-    picks_out = Path(args.picks_out).resolve() if args.picks_out else (merged_dir / "gammapicks_id_arpick.csv")
-
+def load_and_prepare_picks(picks_in: Path) -> pd.DataFrame:
     ensure_file(picks_in, "input merged picks CSV")
 
     picks = pd.read_csv(picks_in)
@@ -499,52 +428,79 @@ def main():
     if missing:
         raise ValueError(f"Missing required columns in {picks_in}: {missing}")
 
-    # Keep only columns already present in your original merged file.
-    # No extra helper columns are kept permanently.
     picks = picks.copy()
     picks["timestamp"] = pd.to_datetime(picks["timestamp"], utc=True, errors="coerce", format="mixed")
+    return picks
 
-    # Filter ONLY picks that should feed location:
-    # - valid event_id
-    # - valid event_idx
-    # - event_idx >= 0  (skip all -1)
-    # - phase is P or S
+
+def build_todo_from_picks(picks: pd.DataFrame) -> pd.DataFrame:
     event_idx_num = pd.to_numeric(picks["event_idx"], errors="coerce")
     phase_norm = picks["type"].astype(str).str.strip().str.lower()
 
     mask_assoc = picks["event_id"].notna() & event_idx_num.notna() & (event_idx_num >= 0)
     mask_phase = phase_norm.isin(["p", "s"])
-    todo = picks.loc[mask_assoc & mask_phase].copy()
 
-    # Add chunk_id only for processing order; do not keep it in final output
+    todo = picks.loc[mask_assoc & mask_phase].copy()
     todo["chunk_id"] = todo["event_id"].astype(str).str.rsplit("_", n=1).str[0]
     todo = todo.sort_values(["chunk_id", "event_id", "id"], kind="stable")
+    return todo
 
-    # Output dataframe starts as exact copy of original
-    out_df = picks.copy()
 
-    if args.keep_debug_cols:
-        out_df["timestamp_original"] = out_df["timestamp"]
-        out_df["dt_arpick_s"] = np.nan
-        out_df["arpick_used"] = False
-        out_df["arpick_status"] = "not_processed"
+# ============================================================
+# worker mode: process ONE chunk in a fresh subprocess
+# ============================================================
 
-    cache = StreamCache()
+def worker_main(args):
+    data_root = Path(args.data_root).resolve()
+    merged_dir = data_root / "merged"
+    picks_in = Path(args.picks_in).resolve() if args.picks_in else (merged_dir / "gammapicks_id.csv")
+
+    if args.worker_chunk_id is None:
+        raise ValueError("worker mode requires --worker_chunk_id")
+    if args.worker_out is None:
+        raise ValueError("worker mode requires --worker_out")
+
+    chunk_id = args.worker_chunk_id
+    worker_out = Path(args.worker_out).resolve()
+
+    picks = load_and_prepare_picks(picks_in)
+    todo = build_todo_from_picks(picks)
+    todo = todo.loc[todo["chunk_id"] == chunk_id].copy()
+
+    rows_out = []
+
+    if len(todo) == 0:
+        pd.DataFrame(columns=["row_index", "new_timestamp", "dt", "used", "status"]).to_csv(worker_out, index=False)
+        return
+
+    chunk_dir = data_root / chunk_id
+    st_chunk = load_chunk_stream(chunk_dir)
 
     n_groups = 0
-    n_rows_considered = 0
-    n_rows_updated = 0
+
+    if st_chunk is None:
+        grouped = todo.groupby(["event_id", "id"], sort=False)
+        for _, g in grouped:
+            n_groups += 1
+            for idx in g.index:
+                rows_out.append({
+                    "row_index": int(idx),
+                    "new_timestamp": picks.loc[idx, "timestamp"],
+                    "dt": np.nan,
+                    "used": False,
+                    "status": "no_waveforms",
+                })
+        pd.DataFrame(rows_out).to_csv(worker_out, index=False, date_format="%Y-%m-%dT%H:%M:%S.%f")
+        return
 
     grouped = todo.groupby(["event_id", "id"], sort=False)
 
     for _, g in grouped:
         n_groups += 1
-        n_rows_considered += len(g)
 
         result = run_arpick_on_group(
             g=g,
-            data_root=data_root,
-            cache=cache,
+            st_chunk=st_chunk,
             pre_p=args.pre_p,
             post_p=args.post_p,
             pre_s=args.pre_s,
@@ -563,27 +519,137 @@ def main():
             l_s=args.l_s,
         )
 
-        for idx, r in result.items():
-            if bool(r["used"]):
-                out_df.at[idx, "timestamp"] = r["new_timestamp"]
-                n_rows_updated += 1
-
-            if args.keep_debug_cols:
-                out_df.at[idx, "dt_arpick_s"] = r["dt"]
-                out_df.at[idx, "arpick_used"] = bool(r["used"])
-                out_df.at[idx, "arpick_status"] = str(r["status"])
+        rows_out.extend(result.values())
 
         if n_groups % int(args.log_every) == 0:
-            print(f"[ar_pick] processed {n_groups} station-event groups", flush=True)
+            print(f"[ar_pick worker:{chunk_id}] processed {n_groups} station-event groups", flush=True)
 
-        # clean temporary objects during long runs
         del result, g
         if n_groups % 50 == 0:
             gc.collect()
 
-    cache.clear()
+    pd.DataFrame(rows_out).to_csv(
+        worker_out,
+        index=False,
+        date_format="%Y-%m-%dT%H:%M:%S.%f",
+    )
 
-    # Keep output compatible and clean
+
+# ============================================================
+# parent mode: orchestrate all chunk workers and merge output
+# ============================================================
+
+def parent_main(args):
+    data_root = Path(args.data_root).resolve()
+    merged_dir = data_root / "merged"
+
+    picks_in = Path(args.picks_in).resolve() if args.picks_in else (merged_dir / "gammapicks_id.csv")
+    picks_out = Path(args.picks_out).resolve() if args.picks_out else (merged_dir / "gammapicks_id_arpick.csv")
+
+    picks = load_and_prepare_picks(picks_in)
+    todo = build_todo_from_picks(picks)
+
+    out_df = picks.copy()
+
+    if args.keep_debug_cols:
+        out_df["timestamp_original"] = out_df["timestamp"]
+        out_df["dt_arpick_s"] = np.nan
+        out_df["arpick_used"] = False
+        out_df["arpick_status"] = "not_processed"
+
+    chunk_ids = todo["chunk_id"].dropna().astype(str).drop_duplicates().tolist()
+
+    if len(chunk_ids) == 0:
+        if args.keep_debug_cols:
+            debug_cols = ["timestamp_original", "dt_arpick_s", "arpick_used", "arpick_status"]
+            base_cols = [c for c in picks.columns]
+            out_df = out_df[base_cols + debug_cols]
+        else:
+            out_df = out_df[picks.columns.tolist()]
+
+        picks_out.parent.mkdir(parents=True, exist_ok=True)
+        out_df.to_csv(picks_out, index=False, date_format="%Y-%m-%dT%H:%M:%S.%f")
+        print("No associated P/S picks to process.")
+        return
+
+    tmp_root = Path(tempfile.mkdtemp(prefix="qq_arpick_chunks_"))
+
+    n_rows_considered = 0
+    n_rows_updated = 0
+
+    try:
+        for i, chunk_id in enumerate(chunk_ids, start=1):
+            tmp_csv = tmp_root / f"{i:06d}_{chunk_id}_updates.csv"
+
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve()),
+                "--data_root", str(data_root),
+                "--namebase", str(args.namebase),
+                "--picks_in", str(picks_in),
+                "--worker_chunk_id", str(chunk_id),
+                "--worker_out", str(tmp_csv),
+                "--pre_p", str(args.pre_p),
+                "--post_p", str(args.post_p),
+                "--pre_s", str(args.pre_s),
+                "--post_s", str(args.post_s),
+                "--max_dt_p", str(args.max_dt_p),
+                "--max_dt_s", str(args.max_dt_s),
+                "--freqmin", str(args.freqmin),
+                "--freqmax", str(args.freqmax),
+                "--lta_p", str(args.lta_p),
+                "--sta_p", str(args.sta_p),
+                "--lta_s", str(args.lta_s),
+                "--sta_s", str(args.sta_s),
+                "--m_p", str(args.m_p),
+                "--m_s", str(args.m_s),
+                "--l_p", str(args.l_p),
+                "--l_s", str(args.l_s),
+                "--log_every", str(args.log_every),
+            ]
+
+            print(f"[ar_pick parent] chunk {i}/{len(chunk_ids)} -> {chunk_id}", flush=True)
+
+            subprocess.run(cmd, check=True)
+
+            upd = pd.read_csv(tmp_csv)
+            if len(upd) == 0:
+                continue
+
+            upd["row_index"] = pd.to_numeric(upd["row_index"], errors="coerce").astype("Int64")
+            upd["used"] = upd["used"].astype(str).str.lower().isin(["true", "1", "yes"])
+            upd["new_timestamp"] = pd.to_datetime(upd["new_timestamp"], utc=True, errors="coerce", format="mixed")
+
+            n_rows_considered += len(upd)
+
+            used = upd["used"].fillna(False)
+            if used.any():
+                used_rows = upd.loc[used].copy()
+
+                for _, r in used_rows.iterrows():
+                    idx = int(r["row_index"])
+                    out_df.at[idx, "timestamp"] = r["new_timestamp"]
+                    n_rows_updated += 1
+
+            if args.keep_debug_cols:
+                for _, r in upd.iterrows():
+                    idx = int(r["row_index"])
+                    out_df.at[idx, "dt_arpick_s"] = r["dt"]
+                    out_df.at[idx, "arpick_used"] = bool(r["used"])
+                    out_df.at[idx, "arpick_status"] = str(r["status"])
+
+            del upd
+            gc.collect()
+
+    except subprocess.CalledProcessError as e:
+        raise RuntimeError(
+            "ar_pick worker failed. "
+            "This now means the failure is isolated to a specific chunk worker, "
+            "not the entire long-lived parent process."
+        ) from e
+    finally:
+        shutil.rmtree(tmp_root, ignore_errors=True)
+
     if args.keep_debug_cols:
         debug_cols = ["timestamp_original", "dt_arpick_s", "arpick_used", "arpick_status"]
         base_cols = [c for c in picks.columns]
@@ -601,11 +667,24 @@ def main():
     print("\n✅ ar_pick refinement finished.")
     print(f"Input picks : {picks_in}")
     print(f"Output picks: {picks_out}")
-    print(f"Groups processed         : {n_groups}")
+    print(f"Chunks processed         : {len(chunk_ids)}")
     print(f"P/S rows considered      : {n_rows_considered}")
     print(f"Rows updated by ar_pick  : {n_rows_updated}")
     if n_rows_considered > 0:
         print(f"Update fraction          : {100.0 * n_rows_updated / n_rows_considered:.2f}%")
+
+
+# ============================================================
+# entry point
+# ============================================================
+
+def main():
+    args = parse_args()
+
+    if args.worker_chunk_id is not None:
+        worker_main(args)
+    else:
+        parent_main(args)
 
 
 if __name__ == "__main__":

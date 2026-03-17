@@ -90,7 +90,7 @@ location_s_model = "velo_s_rv_avo.cre"
 location_ref_ele = 3.2 #reference location highest part in the topography 
 location_depth_min = 0.0
 location_depth_max = 20.0
-location_depth_step = 1
+location_depth_step = 0.5
 
 
 

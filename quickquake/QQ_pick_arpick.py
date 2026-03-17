@@ -26,14 +26,25 @@ Design choices
     * ar_pick fails
     * dt exceeds the allowed threshold
 - Writes only one new CSV by default
+
+Memory/stability notes
+----------------------
+This version is written to preserve the original output logic while being safer
+for large runs:
+- caches only ONE chunk stream at a time instead of all chunks ever seen
+- sorts work by chunk_id to maximize cache reuse
+- explicitly releases temporary objects during long loops
+
+These changes should not alter scientific results; they only reduce memory use.
 """
 
 from __future__ import annotations
 
 import argparse
+import gc
+import warnings
 from pathlib import Path
 from typing import Dict, Optional, Tuple
-import warnings
 
 import numpy as np
 import pandas as pd
@@ -101,6 +112,8 @@ def parse_args():
     # behavior
     ap.add_argument("--keep_debug_cols", action="store_true",
                     help="If set, append a few lightweight diagnostic columns to the output CSV")
+    ap.add_argument("--log_every", type=int, default=200,
+                    help="Print progress every N station-event groups (default: 200)")
     return ap.parse_args()
 
 
@@ -110,25 +123,31 @@ def parse_args():
 
 class StreamCache:
     """
-    Cache one merged stream per chunk/window folder, because merged event_id is
-    built from the chunk folder name in QQ_merge_gamma_outputs.py.
+    Cache only ONE merged stream per chunk/window folder.
+
+    This preserves the original chunk-loading behavior but avoids unbounded
+    memory growth when thousands of chunks are processed.
     """
     def __init__(self):
-        self._cache: Dict[str, Optional[obspy.Stream]] = {}
+        self._key: Optional[str] = None
+        self._stream: Optional[obspy.Stream] = None
 
     def get_chunk_stream(self, chunk_dir: Path) -> Optional[obspy.Stream]:
         key = str(chunk_dir.resolve())
-        if key in self._cache:
-            return self._cache[key]
+        if self._key == key:
+            return self._stream
+
+        # release previous cached stream before loading a new one
+        self._key = None
+        self._stream = None
+        gc.collect()
 
         wdir = chunk_dir / "waveforms"
         if not wdir.exists():
-            self._cache[key] = None
             return None
 
         files = sorted(wdir.glob("*.mseed"))
         if not files:
-            self._cache[key] = None
             return None
 
         st = None
@@ -140,7 +159,6 @@ class StreamCache:
                 pass
 
         if st is None:
-            self._cache[key] = None
             return None
 
         try:
@@ -148,8 +166,14 @@ class StreamCache:
         except Exception:
             pass
 
-        self._cache[key] = st
-        return st
+        self._key = key
+        self._stream = st
+        return self._stream
+
+    def clear(self):
+        self._key = None
+        self._stream = None
+        gc.collect()
 
 
 def parse_sid(sid: str) -> Tuple[str, str, str, str]:
@@ -228,7 +252,6 @@ def prepare_three_components(
         return None
 
     trs = [tr.slice(tr.stats.starttime, tr.stats.starttime + (nmin - 1) / sr) for tr in trs]
-    trs = [tr.copy() for tr in trs]
 
     nyq = 0.5 * sr
     fmin = max(0.001, min(float(freqmin), nyq * 0.99))
@@ -241,11 +264,15 @@ def prepare_three_components(
     a = trs[0].data.astype(np.float64)
     b = trs[1].data.astype(np.float64)
     c = trs[2].data.astype(np.float64)
+    trace_start = trs[0].stats.starttime
 
     if not (np.any(np.isfinite(a)) and np.any(np.isfinite(b)) and np.any(np.isfinite(c))):
         return None
 
-    return a, b, c, sr, trs[0].stats.starttime
+    # explicit cleanup of trace objects
+    del tr_z, tr_n, tr_e, trs
+
+    return a, b, c, sr, trace_start
 
 
 # ============================================================
@@ -407,6 +434,7 @@ def run_arpick_on_group(
                 "used": False,
                 "status": "arpick_failed"
             }
+        del a, b, c
         return out
 
     p_abs = trace_start + float(p_rel) if np.isfinite(p_rel) else None
@@ -445,6 +473,7 @@ def run_arpick_on_group(
                 "status": "phase_not_repicked",
             }
 
+    del a, b, c
     return out
 
 
@@ -486,6 +515,10 @@ def main():
     mask_assoc = picks["event_id"].notna() & event_idx_num.notna() & (event_idx_num >= 0)
     mask_phase = phase_norm.isin(["p", "s"])
     todo = picks.loc[mask_assoc & mask_phase].copy()
+
+    # Add chunk_id only for processing order; do not keep it in final output
+    todo["chunk_id"] = todo["event_id"].astype(str).str.rsplit("_", n=1).str[0]
+    todo = todo.sort_values(["chunk_id", "event_id", "id"], kind="stable")
 
     # Output dataframe starts as exact copy of original
     out_df = picks.copy()
@@ -540,8 +573,15 @@ def main():
                 out_df.at[idx, "arpick_used"] = bool(r["used"])
                 out_df.at[idx, "arpick_status"] = str(r["status"])
 
-        if n_groups % 200 == 0:
-            print(f"[ar_pick] processed {n_groups} station-event groups")
+        if n_groups % int(args.log_every) == 0:
+            print(f"[ar_pick] processed {n_groups} station-event groups", flush=True)
+
+        # clean temporary objects during long runs
+        del result, g
+        if n_groups % 50 == 0:
+            gc.collect()
+
+    cache.clear()
 
     # Keep output compatible and clean
     if args.keep_debug_cols:

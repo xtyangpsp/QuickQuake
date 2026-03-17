@@ -2,10 +2,19 @@
 """
 QuickQuake - lightweight P/S pick refinement with ObsPy ar_pick
 
-Robust version for large runs on macOS / long catalogs:
-- keeps the SAME repick logic and SAME acceptance rules
-- isolates processing by chunk in short-lived subprocesses
-- avoids long-lived native-memory accumulation/corruption
+Optimized robust version:
+- keeps the SAME scientific core:
+    * same ar_pick call
+    * same preprocessing logic
+    * same acceptance thresholds
+    * same "keep original pick if refinement fails" philosophy
+- reads the large merged picks CSV only once in the parent
+- parallelizes by batches of chunk_id using multiprocessing spawn
+- avoids disk I/O for batch/chunk/group transport by passing DataFrames directly
+- uses maxtasksperchild=1 for better stability on macOS
+- falls back automatically:
+    batch -> chunk -> group
+- if a single group crashes native code, original picks are preserved
 
 Default behavior:
     input : <data_root>/merged/gammapicks_id.csv
@@ -16,14 +25,11 @@ from __future__ import annotations
 
 import argparse
 import gc
+import multiprocessing as mp
 import os
-import shutil
-import subprocess
-import sys
-import tempfile
 import warnings
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict, Any
 
 import numpy as np
 import pandas as pd
@@ -79,6 +85,19 @@ def parse_sid(sid: str) -> Tuple[str, str, str, str]:
     return net, sta, loc, chprefix
 
 
+def make_original_result_rows(g: pd.DataFrame, status: str) -> List[Dict[str, Any]]:
+    rows = []
+    for idx in g.index:
+        rows.append({
+            "row_index": int(idx),
+            "new_timestamp": g.loc[idx, "timestamp"],
+            "dt": np.nan,
+            "used": False,
+            "status": status,
+        })
+    return rows
+
+
 # ============================================================
 # argument parsing
 # ============================================================
@@ -124,13 +143,11 @@ def parse_args():
     ap.add_argument("--keep_debug_cols", action="store_true",
                     help="If set, append lightweight diagnostic columns to the final CSV")
     ap.add_argument("--log_every", type=int, default=200,
-                    help="Print progress every N station-event groups in worker mode")
-
-    # internal worker mode
-    ap.add_argument("--worker_chunk_id", type=str, default=None,
-                    help=argparse.SUPPRESS)
-    ap.add_argument("--worker_out", type=str, default=None,
-                    help=argparse.SUPPRESS)
+                    help="Print progress every N station-event groups inside a worker")
+    ap.add_argument("--nproc", type=int, default=max(1, min(4, (os.cpu_count() or 4) - 1)),
+                    help="Number of worker processes for batch-level parallelism")
+    ap.add_argument("--chunks_per_batch", type=int, default=2,
+                    help="How many chunk_ids to send per batch worker")
 
     return ap.parse_args()
 
@@ -182,13 +199,11 @@ def pick_trace_by_component(st: obspy.Stream, sid: str, comp: str) -> Optional[o
         f"HH{comp}",
     ]
 
-    # exact location first
     for ch in candidates:
         tr = st.select(network=net, station=sta, location=loc, channel=ch)
         if len(tr) > 0:
             return tr[0].copy()
 
-    # fallback: same net/station and any channel ending in comp
     tr = st.select(network=net, station=sta, channel=f"*{comp}")
     if len(tr) > 0:
         return tr[0].copy()
@@ -218,7 +233,6 @@ def prepare_three_components(
         tr.detrend("demean")
         tr.taper(max_percentage=0.05, type="cosine")
 
-    # resample to lowest sampling rate if needed
     srs = [float(tr.stats.sampling_rate) for tr in trs]
     sr = min(srs)
 
@@ -226,7 +240,6 @@ def prepare_three_components(
         if abs(float(tr.stats.sampling_rate) - sr) > 1e-6:
             tr.resample(sr)
 
-    # ensure same length
     nmin = min(len(tr.data) for tr in trs)
     if nmin <= 5:
         return None
@@ -241,7 +254,7 @@ def prepare_three_components(
         for tr in trs:
             tr.filter("bandpass", freqmin=fmin, freqmax=fmax, corners=4, zerophase=True)
 
-    # keep dtype/logic same as before
+    # Keep original numerical behavior
     a = trs[0].data.astype(np.float64)
     b = trs[1].data.astype(np.float64)
     c = trs[2].data.astype(np.float64)
@@ -265,9 +278,6 @@ def choose_group_window(
     pre_s: float,
     post_s: float
 ) -> Tuple[UTCDateTime, UTCDateTime]:
-    """
-    Build one local waveform window per (event_id, station id).
-    """
     tmins = []
     tmaxs = []
 
@@ -309,19 +319,6 @@ def run_arpick_on_group(
     l_p: float,
     l_s: float,
 ):
-    """
-    g = one station / one event.
-    Returns a dict indexed by original row index:
-        {
-          row_idx: {
-             "new_timestamp": ...,
-             "dt": ...,
-             "used": bool,
-             "status": ...
-          },
-          ...
-        }
-    """
     out = {}
     sid = str(g.iloc[0]["id"])
 
@@ -337,14 +334,8 @@ def run_arpick_on_group(
     )
 
     if prepared is None:
-        for idx in g.index:
-            out[idx] = {
-                "row_index": int(idx),
-                "new_timestamp": g.loc[idx, "timestamp"],
-                "dt": np.nan,
-                "used": False,
-                "status": "missing_3c",
-            }
+        for row in make_original_result_rows(g, "missing_3c"):
+            out[row["row_index"]] = row
         return out
 
     a, b, c, sr, trace_start = prepared
@@ -360,14 +351,8 @@ def run_arpick_on_group(
             s_pick=True,
         )
     except Exception:
-        for idx in g.index:
-            out[idx] = {
-                "row_index": int(idx),
-                "new_timestamp": g.loc[idx, "timestamp"],
-                "dt": np.nan,
-                "used": False,
-                "status": "arpick_failed",
-            }
+        for row in make_original_result_rows(g, "arpick_failed"):
+            out[row["row_index"]] = row
         del a, b, c
         return out
 
@@ -383,7 +368,7 @@ def run_arpick_on_group(
             new_utc = p_abs
             dt = float(new_utc - old_utc)
             ok = abs(dt) <= float(max_dt_p)
-            out[idx] = {
+            out[int(idx)] = {
                 "row_index": int(idx),
                 "new_timestamp": pd.Timestamp(new_utc.datetime, tz="UTC"),
                 "dt": dt,
@@ -394,7 +379,7 @@ def run_arpick_on_group(
             new_utc = s_abs
             dt = float(new_utc - old_utc)
             ok = abs(dt) <= float(max_dt_s)
-            out[idx] = {
+            out[int(idx)] = {
                 "row_index": int(idx),
                 "new_timestamp": pd.Timestamp(new_utc.datetime, tz="UTC"),
                 "dt": dt,
@@ -402,7 +387,7 @@ def run_arpick_on_group(
                 "status": "updated" if ok else "s_dt_too_large",
             }
         else:
-            out[idx] = {
+            out[int(idx)] = {
                 "row_index": int(idx),
                 "new_timestamp": old_ts,
                 "dt": np.nan,
@@ -446,100 +431,168 @@ def build_todo_from_picks(picks: pd.DataFrame) -> pd.DataFrame:
     return todo
 
 
+def split_list(seq: List[str], batch_size: int) -> List[List[str]]:
+    if batch_size <= 0:
+        batch_size = 1
+    return [seq[i:i + batch_size] for i in range(0, len(seq), batch_size)]
+
+
 # ============================================================
-# worker mode: process ONE chunk in a fresh subprocess
+# worker function for multiprocessing
 # ============================================================
 
-def worker_main(args):
-    data_root = Path(args.data_root).resolve()
-    merged_dir = data_root / "merged"
-    picks_in = Path(args.picks_in).resolve() if args.picks_in else (merged_dir / "gammapicks_id.csv")
+def process_batch(batch_df: pd.DataFrame, data_root_str: str, worker_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """
+    Worker-safe function:
+    - receives a SMALL batch DataFrame directly
+    - processes chunk by chunk
+    - caches one merged stream per chunk within the worker
+    - raises exceptions normally so the parent can fallback
+    """
+    if len(batch_df) == 0:
+        return []
 
-    if args.worker_chunk_id is None:
-        raise ValueError("worker mode requires --worker_chunk_id")
-    if args.worker_out is None:
-        raise ValueError("worker mode requires --worker_out")
+    data_root = Path(data_root_str)
 
-    chunk_id = args.worker_chunk_id
-    worker_out = Path(args.worker_out).resolve()
+    batch_df = batch_df.copy()
+    batch_df["timestamp"] = pd.to_datetime(batch_df["timestamp"], utc=True, errors="coerce", format="mixed")
+    batch_df = batch_df.sort_values(["chunk_id", "event_id", "id"], kind="stable")
 
-    picks = load_and_prepare_picks(picks_in)
-    todo = build_todo_from_picks(picks)
-    todo = todo.loc[todo["chunk_id"] == chunk_id].copy()
-
-    rows_out = []
-
-    if len(todo) == 0:
-        pd.DataFrame(columns=["row_index", "new_timestamp", "dt", "used", "status"]).to_csv(worker_out, index=False)
-        return
-
-    chunk_dir = data_root / chunk_id
-    st_chunk = load_chunk_stream(chunk_dir)
-
+    results: List[Dict[str, Any]] = []
+    last_chunk_id = None
+    st_chunk = None
     n_groups = 0
 
-    if st_chunk is None:
-        grouped = todo.groupby(["event_id", "id"], sort=False)
+    grouped_by_chunk = batch_df.groupby("chunk_id", sort=False)
+
+    for chunk_id, chunk_df in grouped_by_chunk:
+        if chunk_id != last_chunk_id:
+            st_chunk = load_chunk_stream(data_root / str(chunk_id))
+            last_chunk_id = chunk_id
+
+        grouped = chunk_df.groupby(["event_id", "id"], sort=False)
+
         for _, g in grouped:
             n_groups += 1
-            for idx in g.index:
-                rows_out.append({
-                    "row_index": int(idx),
-                    "new_timestamp": picks.loc[idx, "timestamp"],
-                    "dt": np.nan,
-                    "used": False,
-                    "status": "no_waveforms",
-                })
-        pd.DataFrame(rows_out).to_csv(worker_out, index=False, date_format="%Y-%m-%dT%H:%M:%S.%f")
-        return
 
-    grouped = todo.groupby(["event_id", "id"], sort=False)
+            if st_chunk is None:
+                results.extend(make_original_result_rows(g, "no_waveforms"))
+                continue
 
-    for _, g in grouped:
-        n_groups += 1
+            res = run_arpick_on_group(
+                g=g,
+                st_chunk=st_chunk,
+                pre_p=worker_params["pre_p"],
+                post_p=worker_params["post_p"],
+                pre_s=worker_params["pre_s"],
+                post_s=worker_params["post_s"],
+                max_dt_p=worker_params["max_dt_p"],
+                max_dt_s=worker_params["max_dt_s"],
+                freqmin=worker_params["freqmin"],
+                freqmax=worker_params["freqmax"],
+                lta_p=worker_params["lta_p"],
+                sta_p=worker_params["sta_p"],
+                lta_s=worker_params["lta_s"],
+                sta_s=worker_params["sta_s"],
+                m_p=worker_params["m_p"],
+                m_s=worker_params["m_s"],
+                l_p=worker_params["l_p"],
+                l_s=worker_params["l_s"],
+            )
+            results.extend(res.values())
 
-        result = run_arpick_on_group(
-            g=g,
-            st_chunk=st_chunk,
-            pre_p=args.pre_p,
-            post_p=args.post_p,
-            pre_s=args.pre_s,
-            post_s=args.post_s,
-            max_dt_p=args.max_dt_p,
-            max_dt_s=args.max_dt_s,
-            freqmin=args.freqmin,
-            freqmax=args.freqmax,
-            lta_p=args.lta_p,
-            sta_p=args.sta_p,
-            lta_s=args.lta_s,
-            sta_s=args.sta_s,
-            m_p=args.m_p,
-            m_s=args.m_s,
-            l_p=args.l_p,
-            l_s=args.l_s,
-        )
+            if n_groups % int(worker_params["log_every"]) == 0:
+                print(f"[ar_pick worker] processed {n_groups} station-event groups", flush=True)
 
-        rows_out.extend(result.values())
+            del res, g
+            if n_groups % 50 == 0:
+                gc.collect()
 
-        if n_groups % int(args.log_every) == 0:
-            print(f"[ar_pick worker:{chunk_id}] processed {n_groups} station-event groups", flush=True)
-
-        del result, g
-        if n_groups % 50 == 0:
-            gc.collect()
-
-    pd.DataFrame(rows_out).to_csv(
-        worker_out,
-        index=False,
-        date_format="%Y-%m-%dT%H:%M:%S.%f",
-    )
+    return results
 
 
 # ============================================================
-# parent mode: orchestrate all chunk workers and merge output
+# parent helpers
 # ============================================================
 
-def parent_main(args):
+def apply_updates_to_out_df(out_df: pd.DataFrame, upd: pd.DataFrame, keep_debug_cols: bool):
+    n_rows_considered = 0
+    n_rows_updated = 0
+
+    if len(upd) == 0:
+        return n_rows_considered, n_rows_updated
+
+    upd = upd.copy()
+    upd["row_index"] = pd.to_numeric(upd["row_index"], errors="coerce").astype("Int64")
+    upd["used"] = upd["used"].astype(bool)
+    upd["new_timestamp"] = pd.to_datetime(upd["new_timestamp"], utc=True, errors="coerce", format="mixed")
+
+    n_rows_considered = len(upd)
+
+    used = upd["used"].fillna(False)
+    if used.any():
+        used_rows = upd.loc[used]
+        for _, r in used_rows.iterrows():
+            idx = int(r["row_index"])
+            out_df.at[idx, "timestamp"] = r["new_timestamp"]
+            n_rows_updated += 1
+
+    if keep_debug_cols:
+        for _, r in upd.iterrows():
+            idx = int(r["row_index"])
+            out_df.at[idx, "dt_arpick_s"] = r["dt"]
+            out_df.at[idx, "arpick_used"] = bool(r["used"])
+            out_df.at[idx, "arpick_status"] = str(r["status"])
+
+    return n_rows_considered, n_rows_updated
+
+
+def fallback_chunk_group_by_group(
+    chunk_df: pd.DataFrame,
+    data_root: Path,
+    worker_params: Dict[str, Any],
+) -> pd.DataFrame:
+    """
+    Safest fallback:
+    process one group at a time in an isolated short-lived subprocess via spawn Pool(1).
+    If a group crashes native code, only that tiny task dies and the original picks are preserved.
+    """
+    if len(chunk_df) == 0:
+        return pd.DataFrame(columns=["row_index", "new_timestamp", "dt", "used", "status"])
+
+    chunk_id = str(chunk_df["chunk_id"].iloc[0])
+    print(f"[ar_pick parent] fallback group-by-group for chunk {chunk_id}", flush=True)
+
+    all_rows = []
+    grouped = list(chunk_df.groupby(["event_id", "id"], sort=False))
+    ctx = mp.get_context("spawn")
+
+    for j, (_, g) in enumerate(grouped, start=1):
+        try:
+            with ctx.Pool(processes=1, maxtasksperchild=1) as pool:
+                ar = pool.apply_async(process_batch, (g.copy(), str(data_root), worker_params))
+                group_rows = ar.get(timeout=600)
+                all_rows.extend(group_rows)
+
+        except Exception:
+            event_id = str(g.iloc[0]["event_id"])
+            sid = str(g.iloc[0]["id"])
+            print(f"[ar_pick parent] skipped crashing group | chunk={chunk_id} | event_id={event_id} | station={sid}", flush=True)
+            all_rows.extend(make_original_result_rows(g, "group_crashed"))
+
+        if j % 100 == 0:
+            print(f"[ar_pick parent] fallback chunk {chunk_id}: processed {j} groups", flush=True)
+
+    return pd.DataFrame(all_rows, columns=["row_index", "new_timestamp", "dt", "used", "status"])
+
+
+# ============================================================
+# main
+# ============================================================
+
+def main():
+    args = parse_args()
+
     data_root = Path(args.data_root).resolve()
     merged_dir = data_root / "merged"
 
@@ -557,9 +610,7 @@ def parent_main(args):
         out_df["arpick_used"] = False
         out_df["arpick_status"] = "not_processed"
 
-    chunk_ids = todo["chunk_id"].dropna().astype(str).drop_duplicates().tolist()
-
-    if len(chunk_ids) == 0:
+    if len(todo) == 0:
         if args.keep_debug_cols:
             debug_cols = ["timestamp_original", "dt_arpick_s", "arpick_used", "arpick_status"]
             base_cols = [c for c in picks.columns]
@@ -572,83 +623,99 @@ def parent_main(args):
         print("No associated P/S picks to process.")
         return
 
-    tmp_root = Path(tempfile.mkdtemp(prefix="qq_arpick_chunks_"))
+    chunk_ids = todo["chunk_id"].dropna().astype(str).drop_duplicates().tolist()
+    batches = split_list(chunk_ids, max(1, int(args.chunks_per_batch)))
+
+    worker_params = {
+        "pre_p": args.pre_p,
+        "post_p": args.post_p,
+        "pre_s": args.pre_s,
+        "post_s": args.post_s,
+        "max_dt_p": args.max_dt_p,
+        "max_dt_s": args.max_dt_s,
+        "freqmin": args.freqmin,
+        "freqmax": args.freqmax,
+        "lta_p": args.lta_p,
+        "sta_p": args.sta_p,
+        "lta_s": args.lta_s,
+        "sta_s": args.sta_s,
+        "m_p": args.m_p,
+        "m_s": args.m_s,
+        "l_p": args.l_p,
+        "l_s": args.l_s,
+        "log_every": args.log_every,
+    }
+
+    ctx = mp.get_context("spawn")
 
     n_rows_considered = 0
     n_rows_updated = 0
 
-    try:
-        for i, chunk_id in enumerate(chunk_ids, start=1):
-            tmp_csv = tmp_root / f"{i:06d}_{chunk_id}_updates.csv"
+    batch_payloads = []
+    for i, batch_chunk_ids in enumerate(batches, start=1):
+        batch_df = todo.loc[todo["chunk_id"].isin(batch_chunk_ids)].copy()
+        batch_payloads.append((i, batch_chunk_ids, batch_df))
 
-            cmd = [
-                sys.executable,
-                str(Path(__file__).resolve()),
-                "--data_root", str(data_root),
-                "--namebase", str(args.namebase),
-                "--picks_in", str(picks_in),
-                "--worker_chunk_id", str(chunk_id),
-                "--worker_out", str(tmp_csv),
-                "--pre_p", str(args.pre_p),
-                "--post_p", str(args.post_p),
-                "--pre_s", str(args.pre_s),
-                "--post_s", str(args.post_s),
-                "--max_dt_p", str(args.max_dt_p),
-                "--max_dt_s", str(args.max_dt_s),
-                "--freqmin", str(args.freqmin),
-                "--freqmax", str(args.freqmax),
-                "--lta_p", str(args.lta_p),
-                "--sta_p", str(args.sta_p),
-                "--lta_s", str(args.lta_s),
-                "--sta_s", str(args.sta_s),
-                "--m_p", str(args.m_p),
-                "--m_s", str(args.m_s),
-                "--l_p", str(args.l_p),
-                "--l_s", str(args.l_s),
-                "--log_every", str(args.log_every),
-            ]
+    with ctx.Pool(processes=max(1, int(args.nproc)), maxtasksperchild=1) as pool:
+        async_results = []
+        for i, batch_chunk_ids, batch_df in batch_payloads:
+            print(f"[ar_pick parent] batch {i}/{len(batch_payloads)} -> chunks={batch_chunk_ids}", flush=True)
+            ar = pool.apply_async(process_batch, (batch_df, str(data_root), worker_params))
+            async_results.append((i, batch_chunk_ids, batch_df, ar))
 
-            print(f"[ar_pick parent] chunk {i}/{len(chunk_ids)} -> {chunk_id}", flush=True)
+        pool.close()
 
-            subprocess.run(cmd, check=True)
+        for i, batch_chunk_ids, batch_df, ar in async_results:
+            try:
+                batch_rows = ar.get(timeout=7200)
+                upd = pd.DataFrame(batch_rows, columns=["row_index", "new_timestamp", "dt", "used", "status"])
 
-            upd = pd.read_csv(tmp_csv)
-            if len(upd) == 0:
-                continue
+            except Exception as e:
+                print(f"[ar_pick parent] batch {i} failed: {e}", flush=True)
+                print(f"[ar_pick parent] entering fallback for batch {i}", flush=True)
 
-            upd["row_index"] = pd.to_numeric(upd["row_index"], errors="coerce").astype("Int64")
-            upd["used"] = upd["used"].astype(str).str.lower().isin(["true", "1", "yes"])
-            upd["new_timestamp"] = pd.to_datetime(upd["new_timestamp"], utc=True, errors="coerce", format="mixed")
+                upd_parts = []
 
-            n_rows_considered += len(upd)
+                for chunk_id in batch_chunk_ids:
+                    chunk_df = todo.loc[todo["chunk_id"] == chunk_id].copy()
 
-            used = upd["used"].fillna(False)
-            if used.any():
-                used_rows = upd.loc[used].copy()
+                    try:
+                        with ctx.Pool(processes=1, maxtasksperchild=1) as chunk_pool:
+                            ar_chunk = chunk_pool.apply_async(process_batch, (chunk_df, str(data_root), worker_params))
+                            chunk_rows = ar_chunk.get(timeout=3600)
 
-                for _, r in used_rows.iterrows():
-                    idx = int(r["row_index"])
-                    out_df.at[idx, "timestamp"] = r["new_timestamp"]
-                    n_rows_updated += 1
+                        chunk_upd = pd.DataFrame(chunk_rows, columns=["row_index", "new_timestamp", "dt", "used", "status"])
 
-            if args.keep_debug_cols:
-                for _, r in upd.iterrows():
-                    idx = int(r["row_index"])
-                    out_df.at[idx, "dt_arpick_s"] = r["dt"]
-                    out_df.at[idx, "arpick_used"] = bool(r["used"])
-                    out_df.at[idx, "arpick_status"] = str(r["status"])
+                    except Exception as e_chunk:
+                        print(f"[ar_pick parent] chunk {chunk_id} failed: {e_chunk}", flush=True)
+                        chunk_upd = fallback_chunk_group_by_group(
+                            chunk_df=chunk_df,
+                            data_root=data_root,
+                            worker_params=worker_params,
+                        )
+
+                    upd_parts.append(chunk_upd)
+
+                    del chunk_df, chunk_upd
+                    gc.collect()
+
+                if len(upd_parts) > 0:
+                    upd = pd.concat(upd_parts, ignore_index=True)
+                else:
+                    upd = pd.DataFrame(columns=["row_index", "new_timestamp", "dt", "used", "status"])
+
+            c_considered, c_updated = apply_updates_to_out_df(
+                out_df=out_df,
+                upd=upd,
+                keep_debug_cols=args.keep_debug_cols,
+            )
+            n_rows_considered += c_considered
+            n_rows_updated += c_updated
 
             del upd
             gc.collect()
 
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(
-            "ar_pick worker failed. "
-            "This now means the failure is isolated to a specific chunk worker, "
-            "not the entire long-lived parent process."
-        ) from e
-    finally:
-        shutil.rmtree(tmp_root, ignore_errors=True)
+        pool.join()
 
     if args.keep_debug_cols:
         debug_cols = ["timestamp_original", "dt_arpick_s", "arpick_used", "arpick_status"]
@@ -668,23 +735,11 @@ def parent_main(args):
     print(f"Input picks : {picks_in}")
     print(f"Output picks: {picks_out}")
     print(f"Chunks processed         : {len(chunk_ids)}")
+    print(f"Batches processed        : {len(batches)}")
     print(f"P/S rows considered      : {n_rows_considered}")
     print(f"Rows updated by ar_pick  : {n_rows_updated}")
     if n_rows_considered > 0:
         print(f"Update fraction          : {100.0 * n_rows_updated / n_rows_considered:.2f}%")
-
-
-# ============================================================
-# entry point
-# ============================================================
-
-def main():
-    args = parse_args()
-
-    if args.worker_chunk_id is not None:
-        worker_main(args)
-    else:
-        parent_main(args)
 
 
 if __name__ == "__main__":

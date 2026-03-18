@@ -12,29 +12,92 @@ Creates:
     input/
       GAMMA_station_list.json
     output/
+
+This version is intentionally conservative:
+- preserves the same merge logic on healthy inputs
+- excludes the merged_dir subtree from discovery
+- adds traceability / sanity warnings
+- does NOT deduplicate or alter the scientific output automatically
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import shutil
+import re
+from collections import Counter
 from pathlib import Path
-from typing import Dict, Any, Tuple, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
+
+CHUNK_RE = re.compile(r"^\d{8}T\d{6}$")
+
+
+# ============================================================
+# Discovery helpers
+# ============================================================
+
+def _is_under(path: Path, maybe_parent: Optional[Path]) -> bool:
+    if maybe_parent is None:
+        return False
+    try:
+        path.resolve().relative_to(maybe_parent.resolve())
+        return True
+    except Exception:
+        return False
+
+
+def _discover_files(
+    base_dir: Path,
+    pattern: str,
+    exclude_subtrees: Optional[Iterable[Path]] = None,
+) -> List[Path]:
+    exclude_subtrees = [p.resolve() for p in (exclude_subtrees or [])]
+    files: List[Path] = []
+    for f in sorted(base_dir.glob(pattern)):
+        rf = f.resolve()
+        if any(_is_under(rf, ex) for ex in exclude_subtrees):
+            continue
+        files.append(rf)
+    return files
+
+
+def _summarize_discovery(label: str, files: List[Path]) -> None:
+    print(f"[{label}] Encontré {len(files)} archivos")
+    if not files:
+        return
+
+    parent_names = [f.parent.name for f in files]
+    counts = Counter(parent_names)
+    dup_parent_names = {k: v for k, v in counts.items() if v > 1}
+
+    invalid_chunk_names = [name for name in counts if not CHUNK_RE.match(name)]
+    if invalid_chunk_names:
+        print(f"[{label}][WARN] {len(invalid_chunk_names)} parent dirs no parecen chunks YYYYmmddTHHMMSS.")
+        for name in invalid_chunk_names[:10]:
+            print(f"  - {name}")
+
+    if dup_parent_names:
+        print(f"[{label}][WARN] {len(dup_parent_names)} nombres de chunk repetidos en distintas rutas.")
+        for name, n in list(sorted(dup_parent_names.items()))[:10]:
+            print(f"  - {name}: {n} archivos")
 
 
 # ============================================================
 # Merge: gamma_picks.csv -> gammapicks_id.csv
 # ============================================================
 
-def merge_gamma_picks_with_event_id(base_dir: Path, out_dir: Path) -> Path:
+def merge_gamma_picks_with_event_id(
+    base_dir: Path,
+    out_dir: Path,
+    exclude_subtrees: Optional[Iterable[Path]] = None,
+) -> Path:
     pattern = "**/gamma_picks.csv"
     out_path = out_dir / "gammapicks_id.csv"
 
-    files = sorted(base_dir.glob(pattern))
-    print(f"[merge picks] Encontré {len(files)} archivos gamma_picks.csv")
+    files = _discover_files(base_dir, pattern, exclude_subtrees=exclude_subtrees)
+    _summarize_discovery("merge picks", files)
 
     frames = []
     for f in files:
@@ -72,12 +135,16 @@ def merge_gamma_picks_with_event_id(base_dir: Path, out_dir: Path) -> Path:
 # Merge: gamma_catalog.csv -> gammacatalog_id.csv
 # ============================================================
 
-def merge_gamma_catalog_with_event_id(base_dir: Path, out_dir: Path) -> Path:
+def merge_gamma_catalog_with_event_id(
+    base_dir: Path,
+    out_dir: Path,
+    exclude_subtrees: Optional[Iterable[Path]] = None,
+) -> Path:
     pattern = "**/gamma_catalog.csv"
     out_path = out_dir / "gammacatalog_id.csv"
 
-    files = sorted(base_dir.glob(pattern))
-    print(f"[merge catalog] Encontré {len(files)} archivos gamma_catalog.csv")
+    files = _discover_files(base_dir, pattern, exclude_subtrees=exclude_subtrees)
+    _summarize_discovery("merge catalog", files)
 
     frames = []
     for f in files:
@@ -104,6 +171,11 @@ def merge_gamma_catalog_with_event_id(base_dir: Path, out_dir: Path) -> Path:
     merged = pd.concat(frames, ignore_index=True)
     n_unq = merged["event_id"].nunique(dropna=True)
     print(f"[merge catalog] Total eventos (filas): {len(merged)} | event_id únicos: {n_unq}")
+    if n_unq > 0 and len(merged) > 3 * n_unq:
+        print(
+            "[merge catalog][WARN] El número de filas del catálogo es mucho mayor que el número de event_id únicos. "
+            "Esto no cambia el resultado, pero sí sugiere contaminación o duplicación en la entrada."
+        )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     merged.to_csv(out_path, index=False)
@@ -121,12 +193,15 @@ def merge_stations_json_unique(
     pattern: str = "**/stations.json",
     prefer: str = "first",          # "first" o "last"
     check_conflicts: bool = True,
-    tol: float = 1e-6
+    tol: float = 1e-6,
+    exclude_subtrees: Optional[Iterable[Path]] = None,
 ) -> Tuple[Path, int, int, List[str]]:
 
-    files = sorted(base_dir.glob(pattern))
+    files = _discover_files(base_dir, pattern, exclude_subtrees=exclude_subtrees)
     if not files:
         raise FileNotFoundError(f"No encontré stations.json con patrón '{pattern}' dentro de {base_dir}")
+
+    _summarize_discovery("merge stations", files)
 
     merged: Dict[str, Any] = {}
     conflicts: List[str] = []
@@ -180,7 +255,6 @@ def merge_stations_json_unique(
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(merged, indent=2, sort_keys=True))
 
-    print(f"[merge stations] Encontré {len(files)} stations.json")
     print(f"[merge stations] Estaciones únicas: {len(merged)}")
     print(f"[merge stations] Guardado: {out_json}")
 
@@ -217,9 +291,11 @@ def run_merge_block(
     indir.mkdir(parents=True, exist_ok=True)
     outdir.mkdir(parents=True, exist_ok=True)
 
+    exclude_subtrees = [merged_dir]
+
     # 1) Merge CSVs con event_id
-    picks_out = merge_gamma_picks_with_event_id(data_root, merged_dir)
-    catalog_out = merge_gamma_catalog_with_event_id(data_root, merged_dir)
+    picks_out = merge_gamma_picks_with_event_id(data_root, merged_dir, exclude_subtrees=exclude_subtrees)
+    catalog_out = merge_gamma_catalog_with_event_id(data_root, merged_dir, exclude_subtrees=exclude_subtrees)
 
     # 2) Merge stations único (SIN duplicar, mismo formato)
     station_out = indir / f"{namebase}_station_list.json"
@@ -229,6 +305,7 @@ def run_merge_block(
         pattern="**/stations.json",
         prefer="first",
         check_conflicts=True,
+        exclude_subtrees=exclude_subtrees,
     )
 
     print("\n✅ Merge terminado.")

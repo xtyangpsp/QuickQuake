@@ -79,7 +79,7 @@ arpick_m_s = 8                    # AR model order for S
 arpick_l_p = 0.1                  # P picker smoothing/control parameter
 arpick_l_s = 0.2                  # S picker smoothing/control parameter
 
-arpick_keep_debug_cols = False     # Save debug columns in output CSV
+arpick_keep_debug_cols = True     # Save debug columns in output CSV
 
 RUN_LOCATION      =  True
 location_binpath = "/home/elizabeth/bin"

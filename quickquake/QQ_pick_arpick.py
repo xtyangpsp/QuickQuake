@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
 """
-QuickQuake - lightweight P/S pick refinement with ObsPy ar_pick
+QuickQuake - faster P/S pick refinement with ObsPy ar_pick
 
-Optimized robust version:
+Key ideas:
 - keeps the SAME scientific core:
     * same ar_pick call
-    * same preprocessing logic
     * same acceptance thresholds
     * same "keep original pick if refinement fails" philosophy
 - reads the large merged picks CSV only once in the parent
 - parallelizes by batches of chunk_id using multiprocessing spawn
-- avoids disk I/O for batch/chunk/group transport by passing DataFrames directly
-- uses maxtasksperchild=1 for better stability on macOS
-- falls back automatically:
-    batch -> chunk -> group
-- if a single group crashes native code, original picks are preserved
+- handles exceptions at group level so one bad group does not kill a batch
+- processes chunk -> station -> event for speed
+- preprocesses each station ONCE per chunk (select, detrend, taper, resample, filter)
+- then extracts small windows per event from the cached station arrays
 
 Default behavior:
     input : <data_root>/merged/gammapicks_id.csv
@@ -66,7 +64,7 @@ def infer_chunk_id_from_event_id(event_id: str) -> Optional[str]:
     """
     if pd.isna(event_id):
         return None
-    s = str(event_id)
+    s = str(event_id).strip()
     if "_" not in s:
         return None
     return s.rsplit("_", 1)[0]
@@ -98,6 +96,13 @@ def make_original_result_rows(g: pd.DataFrame, status: str) -> List[Dict[str, An
     return rows
 
 
+def pool_kwargs(processes: int, maxtasksperchild: int) -> Dict[str, Any]:
+    kwargs: Dict[str, Any] = {"processes": max(1, int(processes))}
+    if maxtasksperchild is not None and int(maxtasksperchild) > 0:
+        kwargs["maxtasksperchild"] = int(maxtasksperchild)
+    return kwargs
+
+
 # ============================================================
 # argument parsing
 # ============================================================
@@ -125,7 +130,7 @@ def parse_args():
     ap.add_argument("--max_dt_p", type=float, default=0.30)
     ap.add_argument("--max_dt_s", type=float, default=0.50)
 
-    # preprocessing for ar_pick
+    # preprocessing / ar_pick frequency args
     ap.add_argument("--freqmin", type=float, default=1.0)
     ap.add_argument("--freqmax", type=float, default=15.0)
 
@@ -142,12 +147,20 @@ def parse_args():
     # behavior
     ap.add_argument("--keep_debug_cols", action="store_true",
                     help="If set, append lightweight diagnostic columns to the final CSV")
-    ap.add_argument("--log_every", type=int, default=200,
+    ap.add_argument("--log_every", type=int, default=5000,
                     help="Print progress every N station-event groups inside a worker")
     ap.add_argument("--nproc", type=int, default=max(1, min(4, (os.cpu_count() or 4) - 1)),
                     help="Number of worker processes for batch-level parallelism")
-    ap.add_argument("--chunks_per_batch", type=int, default=2,
+    ap.add_argument("--chunks_per_batch", type=int, default=12,
                     help="How many chunk_ids to send per batch worker")
+    ap.add_argument("--maxtasksperchild", type=int, default=0,
+                    help="Recycle worker after N tasks. Use 0 or negative to disable recycling.")
+    ap.add_argument("--batch_timeout_s", type=int, default=7200,
+                    help="Timeout in seconds for a batch")
+    ap.add_argument("--chunk_timeout_s", type=int, default=3600,
+                    help="Timeout in seconds for a chunk fallback")
+    ap.add_argument("--group_timeout_s", type=int, default=600,
+                    help="Timeout in seconds for a group fallback")
 
     return ap.parse_args()
 
@@ -211,14 +224,20 @@ def pick_trace_by_component(st: obspy.Stream, sid: str, comp: str) -> Optional[o
     return None
 
 
-def prepare_three_components(
+def prepare_station_cache(
     st_chunk: obspy.Stream,
     sid: str,
-    t_start: UTCDateTime,
-    t_end: UTCDateTime,
     freqmin: float,
     freqmax: float,
-) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, float, UTCDateTime]]:
+) -> Optional[Dict[str, Any]]:
+    """
+    Prepare one station once for the whole chunk:
+    - select Z/N/E
+    - demean/taper
+    - resample to common rate
+    - bandpass once
+    - store arrays + common start/end metadata
+    """
     tr_z = pick_trace_by_component(st_chunk, sid, "Z")
     tr_n = pick_trace_by_component(st_chunk, sid, "N")
     tr_e = pick_trace_by_component(st_chunk, sid, "E")
@@ -229,7 +248,6 @@ def prepare_three_components(
     trs = [tr_z, tr_n, tr_e]
 
     for tr in trs:
-        tr.trim(t_start, t_end, pad=True, fill_value=0)
         tr.detrend("demean")
         tr.taper(max_percentage=0.05, type="cosine")
 
@@ -239,6 +257,13 @@ def prepare_three_components(
     for tr in trs:
         if abs(float(tr.stats.sampling_rate) - sr) > 1e-6:
             tr.resample(sr)
+
+    t0 = max(tr.stats.starttime for tr in trs)
+    t1 = min(tr.stats.endtime for tr in trs)
+    if t1 <= t0:
+        return None
+
+    trs = [tr.slice(t0, t1) for tr in trs]
 
     nmin = min(len(tr.data) for tr in trs)
     if nmin <= 5:
@@ -254,17 +279,67 @@ def prepare_three_components(
         for tr in trs:
             tr.filter("bandpass", freqmin=fmin, freqmax=fmax, corners=4, zerophase=True)
 
-    # Keep original numerical behavior
     a = trs[0].data.astype(np.float64)
     b = trs[1].data.astype(np.float64)
     c = trs[2].data.astype(np.float64)
-    trace_start = trs[0].stats.starttime
 
     if not (np.any(np.isfinite(a)) and np.any(np.isfinite(b)) and np.any(np.isfinite(c))):
         return None
 
-    del tr_z, tr_n, tr_e, trs
-    return a, b, c, sr, trace_start
+    return {
+        "a": a,
+        "b": b,
+        "c": c,
+        "sr": sr,
+        "trace_start": trs[0].stats.starttime,
+        "npts": len(a),
+    }
+
+
+def extract_window_from_cache(
+    cache: Dict[str, Any],
+    t_start: UTCDateTime,
+    t_end: UTCDateTime,
+) -> Optional[Tuple[np.ndarray, np.ndarray, np.ndarray, float, UTCDateTime]]:
+    """
+    Extract a padded time window from a preprocessed station cache.
+    """
+    sr = float(cache["sr"])
+    trace_start = cache["trace_start"]
+    npts = int(cache["npts"])
+
+    a_full = cache["a"]
+    b_full = cache["b"]
+    c_full = cache["c"]
+
+    win_n = int(round((t_end - t_start) * sr)) + 1
+    if win_n <= 5:
+        return None
+
+    out_a = np.zeros(win_n, dtype=np.float64)
+    out_b = np.zeros(win_n, dtype=np.float64)
+    out_c = np.zeros(win_n, dtype=np.float64)
+
+    i0_full = int(np.floor((t_start - trace_start) * sr))
+    i1_full = i0_full + win_n
+
+    src0 = max(0, i0_full)
+    src1 = min(npts, i1_full)
+
+    if src1 <= src0:
+        return None
+
+    dst0 = src0 - i0_full
+    dst1 = dst0 + (src1 - src0)
+
+    out_a[dst0:dst1] = a_full[src0:src1]
+    out_b[dst0:dst1] = b_full[src0:src1]
+    out_c[dst0:dst1] = c_full[src0:src1]
+
+    if not (np.any(np.isfinite(out_a)) and np.any(np.isfinite(out_b)) and np.any(np.isfinite(out_c))):
+        return None
+
+    return out_a, out_b, out_c, sr, t_start
 
 
 # ============================================================
@@ -300,7 +375,7 @@ def choose_group_window(
 
 def run_arpick_on_group(
     g: pd.DataFrame,
-    st_chunk: obspy.Stream,
+    station_cache: Dict[str, Any],
     *,
     pre_p: float,
     post_p: float,
@@ -320,21 +395,17 @@ def run_arpick_on_group(
     l_s: float,
 ):
     out = {}
-    sid = str(g.iloc[0]["id"])
 
     t_start, t_end = choose_group_window(g, pre_p, post_p, pre_s, post_s)
 
-    prepared = prepare_three_components(
-        st_chunk=st_chunk,
-        sid=sid,
+    prepared = extract_window_from_cache(
+        cache=station_cache,
         t_start=t_start,
         t_end=t_end,
-        freqmin=freqmin,
-        freqmax=freqmax,
     )
 
     if prepared is None:
-        for row in make_original_result_rows(g, "missing_3c"):
+        for row in make_original_result_rows(g, "missing_window"):
             out[row["row_index"]] = row
         return out
 
@@ -426,8 +497,15 @@ def build_todo_from_picks(picks: pd.DataFrame) -> pd.DataFrame:
     mask_phase = phase_norm.isin(["p", "s"])
 
     todo = picks.loc[mask_assoc & mask_phase].copy()
-    todo["chunk_id"] = todo["event_id"].astype(str).str.rsplit("_", n=1).str[0]
-    todo = todo.sort_values(["chunk_id", "event_id", "id"], kind="stable")
+    todo["chunk_id"] = todo["event_id"].apply(infer_chunk_id_from_event_id)
+
+    todo = todo.loc[todo["chunk_id"].notna()].copy()
+    todo["chunk_id"] = todo["chunk_id"].astype(str).str.strip()
+
+    # Keep only chunk ids with expected format YYYYMMDDTHHMMSS
+    todo = todo.loc[todo["chunk_id"].str.match(r"^\d{8}T\d{6}$", na=False)].copy()
+
+    todo = todo.sort_values(["chunk_id", "id", "event_id"], kind="stable")
     return todo
 
 
@@ -443,11 +521,11 @@ def split_list(seq: List[str], batch_size: int) -> List[List[str]]:
 
 def process_batch(batch_df: pd.DataFrame, data_root_str: str, worker_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
-    Worker-safe function:
-    - receives a SMALL batch DataFrame directly
+    Faster worker:
     - processes chunk by chunk
-    - caches one merged stream per chunk within the worker
-    - raises exceptions normally so the parent can fallback
+    - inside each chunk, groups by station first
+    - preprocesses each station only once
+    - then runs ar_pick for each event of that station
     """
     if len(batch_df) == 0:
         return []
@@ -456,57 +534,90 @@ def process_batch(batch_df: pd.DataFrame, data_root_str: str, worker_params: Dic
 
     batch_df = batch_df.copy()
     batch_df["timestamp"] = pd.to_datetime(batch_df["timestamp"], utc=True, errors="coerce", format="mixed")
-    batch_df = batch_df.sort_values(["chunk_id", "event_id", "id"], kind="stable")
+    batch_df = batch_df.sort_values(["chunk_id", "id", "event_id"], kind="stable")
 
     results: List[Dict[str, Any]] = []
-    last_chunk_id = None
-    st_chunk = None
     n_groups = 0
 
     grouped_by_chunk = batch_df.groupby("chunk_id", sort=False)
 
     for chunk_id, chunk_df in grouped_by_chunk:
-        if chunk_id != last_chunk_id:
+        try:
             st_chunk = load_chunk_stream(data_root / str(chunk_id))
-            last_chunk_id = chunk_id
+        except Exception as e:
+            print(f"[ar_pick worker] failed loading chunk stream | chunk={chunk_id} | err={e}", flush=True)
+            st_chunk = None
 
-        grouped = chunk_df.groupby(["event_id", "id"], sort=False)
-
-        for _, g in grouped:
-            n_groups += 1
-
-            if st_chunk is None:
+        if st_chunk is None:
+            for _, g in chunk_df.groupby(["event_id", "id"], sort=False):
                 results.extend(make_original_result_rows(g, "no_waveforms"))
+            continue
+
+        grouped_by_sid = chunk_df.groupby("id", sort=False)
+
+        for sid, sid_df in grouped_by_sid:
+            try:
+                station_cache = prepare_station_cache(
+                    st_chunk=st_chunk,
+                    sid=str(sid),
+                    freqmin=worker_params["freqmin"],
+                    freqmax=worker_params["freqmax"],
+                )
+            except Exception as e:
+                print(f"[ar_pick worker] station cache failed | chunk={chunk_id} | station={sid} | err={e}", flush=True)
+                station_cache = None
+
+            if station_cache is None:
+                for _, g in sid_df.groupby("event_id", sort=False):
+                    results.extend(make_original_result_rows(g, "missing_3c"))
                 continue
 
-            res = run_arpick_on_group(
-                g=g,
-                st_chunk=st_chunk,
-                pre_p=worker_params["pre_p"],
-                post_p=worker_params["post_p"],
-                pre_s=worker_params["pre_s"],
-                post_s=worker_params["post_s"],
-                max_dt_p=worker_params["max_dt_p"],
-                max_dt_s=worker_params["max_dt_s"],
-                freqmin=worker_params["freqmin"],
-                freqmax=worker_params["freqmax"],
-                lta_p=worker_params["lta_p"],
-                sta_p=worker_params["sta_p"],
-                lta_s=worker_params["lta_s"],
-                sta_s=worker_params["sta_s"],
-                m_p=worker_params["m_p"],
-                m_s=worker_params["m_s"],
-                l_p=worker_params["l_p"],
-                l_s=worker_params["l_s"],
-            )
-            results.extend(res.values())
+            for _, g in sid_df.groupby("event_id", sort=False):
+                n_groups += 1
 
-            if n_groups % int(worker_params["log_every"]) == 0:
-                print(f"[ar_pick worker] processed {n_groups} station-event groups", flush=True)
+                try:
+                    res = run_arpick_on_group(
+                        g=g,
+                        station_cache=station_cache,
+                        pre_p=worker_params["pre_p"],
+                        post_p=worker_params["post_p"],
+                        pre_s=worker_params["pre_s"],
+                        post_s=worker_params["post_s"],
+                        max_dt_p=worker_params["max_dt_p"],
+                        max_dt_s=worker_params["max_dt_s"],
+                        freqmin=worker_params["freqmin"],
+                        freqmax=worker_params["freqmax"],
+                        lta_p=worker_params["lta_p"],
+                        sta_p=worker_params["sta_p"],
+                        lta_s=worker_params["lta_s"],
+                        sta_s=worker_params["sta_s"],
+                        m_p=worker_params["m_p"],
+                        m_s=worker_params["m_s"],
+                        l_p=worker_params["l_p"],
+                        l_s=worker_params["l_s"],
+                    )
+                    results.extend(res.values())
+                    del res
 
-            del res, g
-            if n_groups % 50 == 0:
-                gc.collect()
+                except Exception as e:
+                    event_id = str(g.iloc[0]["event_id"]) if len(g) else "unknown_event"
+                    print(
+                        f"[ar_pick worker] ERROR processing group | chunk={chunk_id} | event_id={event_id} | station={sid}: {e}",
+                        flush=True
+                    )
+                    results.extend(make_original_result_rows(g, "group_exception"))
+
+                if n_groups % int(worker_params["log_every"]) == 0:
+                    print(f"[ar_pick worker] processed {n_groups} station-event groups", flush=True)
+
+                if n_groups % 100 == 0:
+                    gc.collect()
+
+            del station_cache
+            gc.collect()
+
+        del st_chunk
+        gc.collect()
 
     return results
 
@@ -571,7 +682,7 @@ def fallback_chunk_group_by_group(
         try:
             with ctx.Pool(processes=1, maxtasksperchild=1) as pool:
                 ar = pool.apply_async(process_batch, (g.copy(), str(data_root), worker_params))
-                group_rows = ar.get(timeout=600)
+                group_rows = ar.get(timeout=int(worker_params["group_timeout_s"]))
                 all_rows.extend(group_rows)
 
         except Exception:
@@ -644,6 +755,7 @@ def main():
         "l_p": args.l_p,
         "l_s": args.l_s,
         "log_every": args.log_every,
+        "group_timeout_s": args.group_timeout_s,
     }
 
     ctx = mp.get_context("spawn")
@@ -656,7 +768,7 @@ def main():
         batch_df = todo.loc[todo["chunk_id"].isin(batch_chunk_ids)].copy()
         batch_payloads.append((i, batch_chunk_ids, batch_df))
 
-    with ctx.Pool(processes=max(1, int(args.nproc)), maxtasksperchild=1) as pool:
+    with ctx.Pool(**pool_kwargs(processes=args.nproc, maxtasksperchild=args.maxtasksperchild)) as pool:
         async_results = []
         for i, batch_chunk_ids, batch_df in batch_payloads:
             print(f"[ar_pick parent] batch {i}/{len(batch_payloads)} -> chunks={batch_chunk_ids}", flush=True)
@@ -667,7 +779,7 @@ def main():
 
         for i, batch_chunk_ids, batch_df, ar in async_results:
             try:
-                batch_rows = ar.get(timeout=7200)
+                batch_rows = ar.get(timeout=int(args.batch_timeout_s))
                 upd = pd.DataFrame(batch_rows, columns=["row_index", "new_timestamp", "dt", "used", "status"])
 
             except Exception as e:
@@ -682,7 +794,7 @@ def main():
                     try:
                         with ctx.Pool(processes=1, maxtasksperchild=1) as chunk_pool:
                             ar_chunk = chunk_pool.apply_async(process_batch, (chunk_df, str(data_root), worker_params))
-                            chunk_rows = ar_chunk.get(timeout=3600)
+                            chunk_rows = ar_chunk.get(timeout=int(args.chunk_timeout_s))
 
                         chunk_upd = pd.DataFrame(chunk_rows, columns=["row_index", "new_timestamp", "dt", "used", "status"])
 

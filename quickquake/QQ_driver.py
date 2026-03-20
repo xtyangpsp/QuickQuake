@@ -58,7 +58,7 @@ gamma_max_sigma12      = 1     #covariance
 
 RUN_MERGE_GAMMA = True
 
-RUN_ARPICK = True                 # Enable ar_pick repicking step
+RUN_ARPICK = False                # Enable ar_pick repicking step
 
 arpick_namebase = "GAMMA"         # Base name used in pipeline files
 arpick_pre_p = 1.0                # Seconds before original P pick in local window
@@ -104,9 +104,9 @@ qc_vsteps_curve = 150
 qc_winlen = 3
 qc_noise_percentile  = 50.0
 qc_signal_percentile = 90.0
-qc_min_ratio = 2.0 
+qc_min_ratio = 5.0 
 qc_energy_type = "squared_median" # other option is "envelope_median" or "squared_median"
-qc_make_plot = False
+qc_make_plot = True
 qc_max_plots = 50 #None change 
 
 # SCRIPTS 

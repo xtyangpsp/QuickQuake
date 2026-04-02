@@ -29,6 +29,7 @@ from pathlib import Path
 
 import numpy as np
 from hypoxpy.workflow import relocate
+from typing import Optional
 
 
 # 
@@ -55,8 +56,12 @@ def ensure_file(path: Path, label: str):
         raise FileNotFoundError(f"Missing {label}: {path}")
 
 
+# def stage_in_merged(merged_dir: Path, templates_dir: Path, namebase: str,
+#                     p_model_name: str, s_model_name: str):
+
 def stage_in_merged(merged_dir: Path, templates_dir: Path, namebase: str,
-                    p_model_name: str, s_model_name: str):
+                    p_model_name: str, s_model_name: str,
+                    picks_override: Optional[Path] = None):
     """
     Work INSIDE merged_dir:
       merged_dir/input
@@ -73,8 +78,10 @@ def stage_in_merged(merged_dir: Path, templates_dir: Path, namebase: str,
     outdir.mkdir(parents=True, exist_ok=True)
 
     # merged CSVs produced by your merge step
+    # cat_src = merged_dir / "gammacatalog_id.csv"
+    # picks_src = merged_dir / "gammapicks_id.csv"
     cat_src = merged_dir / "gammacatalog_id.csv"
-    picks_src = merged_dir / "gammapicks_id.csv"
+    picks_src = picks_override if picks_override is not None else (merged_dir / "gammapicks_id.csv")
     ensure_file(cat_src, "merged catalog (gammacatalog_id.csv)")
     ensure_file(picks_src, "merged picks (gammapicks_id.csv)")
 
@@ -128,7 +135,7 @@ def main():
     ap.add_argument("--depth_min", type=float, default=0.0)
     ap.add_argument("--depth_max", type=float, default=20.0)
     ap.add_argument("--depth_step", type=float, default=1.0)
-
+    ap.add_argument("--picks_file", default=None, help="Optional picks CSV to use instead of merged/gammapicks_id.csv")
     ap.add_argument("--dep_corr", type=float, default=0.0)
     ap.add_argument("--cleanup", action="store_true")
     ap.add_argument("--qc_phase", action="store_true")  # default False
@@ -142,12 +149,15 @@ def main():
     merged_dir = Path(args.merged_dir) if args.merged_dir else (repo_root / "data" / "merged")
     templates_dir = Path(args.templates_dir) if args.templates_dir else (repo_root / "hypox_templates")
 
+    picks_override = Path(args.picks_file).resolve() if args.picks_file else None
+
     indir, outdir, p_model_used, s_model_used = stage_in_merged(
         merged_dir=merged_dir,
         templates_dir=templates_dir,
         namebase=args.namebase,
         p_model_name=args.p_model,
         s_model_name=args.s_model,
+        picks_override=picks_override
     )
 
     # Work from merged_dir so we can use short relative paths like the original script

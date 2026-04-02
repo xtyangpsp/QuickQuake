@@ -58,6 +58,29 @@ gamma_max_sigma12      = 1     #covariance
 
 RUN_MERGE_GAMMA = True
 
+RUN_ARPICK = False                # Enable ar_pick repicking step
+
+arpick_namebase = "GAMMA"         # Base name used in pipeline files
+arpick_pre_p = 1.0                # Seconds before original P pick in local window
+arpick_post_p = 2.0               # Seconds after original P pick in local window
+arpick_pre_s = 1.5                # Seconds before original S pick in local window
+arpick_post_s = 3.0               # Seconds after original S pick in local window
+arpick_max_dt_p = 0.13            # Max allowed P repick shift from original pick
+arpick_max_dt_s = 0.30            # Max allowed S repick shift from original pick
+arpick_freqmin = 1.0              # Bandpass low cutoff before ar_pick
+arpick_freqmax = 20.0             # Bandpass high cutoff before ar_pick
+
+arpick_lta_p = 1.0                # Long-term window for P trigger
+arpick_sta_p = 0.1                # Short-term window for P trigger
+arpick_lta_s = 2.0                # Long-term window for S trigger
+arpick_sta_s = 0.2                # Short-term window for S trigger
+arpick_m_p = 2                    # AR model order for P
+arpick_m_s = 8                    # AR model order for S
+arpick_l_p = 0.1                  # P picker smoothing/control parameter
+arpick_l_s = 0.2                  # S picker smoothing/control parameter
+
+arpick_keep_debug_cols = True     # Save debug columns in output CSV
+
 RUN_LOCATION      =  True
 location_binpath = "/home/elizabeth/bin"
 location_namebase = "GAMMA"
@@ -67,7 +90,7 @@ location_s_model = "velo_s_rv_avo.cre"
 location_ref_ele = 3.2 #reference location highest part in the topography 
 location_depth_min = 0.0
 location_depth_max = 20.0
-location_depth_step = 1
+location_depth_step = 0.5
 
 
 
@@ -78,11 +101,12 @@ qc_min_valid_stations_per_v = None  # None => defaults to qc_min_total_stations
 qc_vmin_curve   = 2.0
 qc_vmax_curve   = 8.0
 qc_vsteps_curve = 150
-qc_winlen = 1
+qc_winlen = 3
 qc_noise_percentile  = 50.0
 qc_signal_percentile = 90.0
-qc_min_ratio = 2.0 
-qc_make_plot = False
+qc_min_ratio = 5.0 
+qc_energy_type = "squared_median" # other option is "envelope_median" or "squared_median"
+qc_make_plot = True
 qc_max_plots = 50 #None change 
 
 # SCRIPTS 
@@ -94,6 +118,7 @@ SCRIPTS = {
     "phasenet":    BASE_DIR / "quickquake/QQ_predict.py",
     "gamma":       BASE_DIR / "quickquake/QQ_gamma.py",
     "merge":       BASE_DIR / "quickquake/QQ_merge_gamma_outputs.py",
+    "arpick":      BASE_DIR / "quickquake/QQ_pick_arpick.py",
     "location":    BASE_DIR / "quickquake/QQ_location.py",
     "qc_velocity": BASE_DIR / "quickquake/QQ_qc.py",
 }
@@ -223,7 +248,45 @@ def main():
         ]
         run_step(cmd_merge, "Merge GaMMA outputs", cwd=BASE_DIR)
 
+   # 3) ar_pick refinement (as subprocess)
+    if RUN_ARPICK:
+        cmd_arpick = [
+            sys.executable, str(SCRIPTS["arpick"]),
+            "--data_root", str(DATA_ROOT),
+            "--namebase", str(arpick_namebase),
+
+            "--pre_p", str(arpick_pre_p),
+            "--post_p", str(arpick_post_p),
+            "--pre_s", str(arpick_pre_s),
+            "--post_s", str(arpick_post_s),
+
+            "--max_dt_p", str(arpick_max_dt_p),
+            "--max_dt_s", str(arpick_max_dt_s),
+
+            "--freqmin", str(arpick_freqmin),
+            "--freqmax", str(arpick_freqmax),
+
+            "--lta_p", str(arpick_lta_p),
+            "--sta_p", str(arpick_sta_p),
+            "--lta_s", str(arpick_lta_s),
+            "--sta_s", str(arpick_sta_s),
+
+            "--m_p", str(arpick_m_p),
+            "--m_s", str(arpick_m_s),
+            "--l_p", str(arpick_l_p),
+            "--l_s", str(arpick_l_s),
+        ]
+
+        if arpick_keep_debug_cols:
+            cmd_arpick.append("--keep_debug_cols")
+
+        run_step(cmd_arpick, "ar_pick refinement", cwd=BASE_DIR)   
+
     # 3) Location (as subprocess)
+    if RUN_ARPICK:
+        picks_file = DATA_ROOT / "merged" / "gammapicks_id_arpick.csv"
+    else:
+        picks_file = DATA_ROOT / "merged" / "gammapicks_id.csv"
     if RUN_LOCATION:
         cmd_loc = [
         sys.executable, str(SCRIPTS["location"]),
@@ -231,7 +294,7 @@ def main():
         "--templates_dir", str(BASE_DIR / "hypox_templates"),
         "--binpath", str(location_binpath),
         "--namebase", str(location_namebase),
-
+         "--picks_file", str(picks_file),
         "--p_model", str(location_p_model),
         "--s_model", str(location_s_model),
         "--ref_ele", str(location_ref_ele),
@@ -242,7 +305,7 @@ def main():
     ] + list(location_extra_args)
         run_step(cmd_loc, "HypoXPy relocation (HypoInverse + HypoDD)", cwd=BASE_DIR)
 
-
+    
 
 
     # 4) QC (as subprocess)
@@ -257,6 +320,7 @@ def main():
             "--vsteps_curve", str(qc_vsteps_curve),
 
             "--winlen", str(qc_winlen),
+            "--energy_type", str(qc_energy_type),
             "--min_total_stations", str(qc_min_total_stations),
 
             "--noise_percentile", str(qc_noise_percentile),

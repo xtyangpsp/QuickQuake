@@ -43,6 +43,7 @@ import numpy as np
 import pandas as pd
 import obspy
 from obspy import read, UTCDateTime
+from obspy.signal.filter import envelope
 from obspy.geodetics.base import gps2dist_azimuth
 
 
@@ -203,7 +204,7 @@ def best_Z_channel_for_station(st: obspy.Stream, net_sta: str) -> Optional[str]:
     return None
 
 
-def window_l2_energy_fast(tr: obspy.Trace, t_abs: UTCDateTime, win_len_s: float) -> float:
+def window_energy_stat(tr: obspy.Trace, t_abs: UTCDateTime, win_len_s: float, energy_type: str = "squared_median",) -> float:
     sr = float(tr.stats.sampling_rate)
     n = tr.data.size
     if n == 0 or not np.isfinite(sr) or sr <= 0:
@@ -222,7 +223,26 @@ def window_l2_energy_fast(tr: obspy.Trace, t_abs: UTCDateTime, win_len_s: float)
         return 0.0
 
     x = tr.data[a:b].astype(np.float64, copy=False)
-    return float(np.dot(x, x))
+    if x.size == 0:
+        return 0.0
+
+    if energy_type == "squared_median":
+        val = np.median(x ** 2)
+
+    elif energy_type == "envelope_median":
+        env = envelope(x)
+        val = np.median(env)
+
+    else:
+        raise ValueError(
+            f"Unsupported energy_type='{energy_type}'. "
+            "Use 'squared_median' or 'envelope_median'."
+        )
+
+    if not np.isfinite(val) or val <= 0.0:
+        return 0.0
+
+    return float(val)
 
 
 def safe_percentile(x: np.ndarray, p: float) -> float:
@@ -336,6 +356,7 @@ def qc_one_event(
     *,
     v_grid: np.ndarray,
     winlen: float,
+    energy_type: str,
     noise_percentile: float,
     signal_percentile: float,
     make_plot: bool,
@@ -420,7 +441,13 @@ def qc_one_event(
             if (t_abs - half) < t_start or (t_abs + half) > t_end:
                 continue
 
-            E = window_l2_energy_fast(tr, t_abs, win_len_s=float(winlen))
+            
+            E = window_energy_stat(
+                tr,
+                t_abs,
+                win_len_s=float(winlen),
+                energy_type=energy_type,
+            )
             if not np.isfinite(E) or E <= 0.0:
                 continue
 
@@ -507,6 +534,13 @@ def main():
     ap.add_argument("--vmax_curve", type=float, default=8.0)
     ap.add_argument("--vsteps_curve", type=int, default=150)
     ap.add_argument("--winlen", type=float, default=0.5)
+    ap.add_argument(
+        "--energy_type",
+        type=str,
+        default="squared_median",
+        choices=["squared_median", "envelope_median"],
+        help="Per-trace energy definition within the short window around the predicted arrival.",
+    )
     ap.add_argument("--noise_percentile", type=float, default=50.0)
     ap.add_argument("--signal_percentile", type=float, default=90.0)
     ap.add_argument(
@@ -574,6 +608,7 @@ def main():
         row_event = catalog.iloc[i]
         do_plot = bool(args.make_plot) and (plots_left > 0)
 
+        
         r = qc_one_event(
             row_event,
             event_to_station_ids,
@@ -583,6 +618,7 @@ def main():
             cache,
             v_grid=v_grid,
             winlen=args.winlen,
+            energy_type=args.energy_type,
             noise_percentile=args.noise_percentile,
             signal_percentile=args.signal_percentile,
             make_plot=do_plot,

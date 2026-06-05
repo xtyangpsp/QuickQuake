@@ -54,11 +54,11 @@ if __name__ == "__main__":
     parser.add_argument("--region", required=True, help="Region (e.g., pavlof)")
     args = parser.parse_args()
     
-    # Convertir el string de center a una tupla de floats
+    # Convert the center string to a tuple of floats
     try:
         center = tuple(map(float, args.center.split(',')))
     except Exception as e:
-        raise ValueError("El argumento --center debe tener el formato lat,lon") from e
+        raise ValueError("The --center argument must use the format lon,lat") from e
 
     networks = args.networks.split(',')
 # This section runs the configuration step and writes config.json.

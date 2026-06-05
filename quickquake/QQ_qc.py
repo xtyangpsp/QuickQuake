@@ -2,17 +2,8 @@
 """
 QQ_qc.py
 
-QC por curva de energía vs velocidad usando percentiles:
+QC based on the energy-versus-velocity curve using percentiles:
 pc_ratio_energy = P(signal_percentile) / P(noise_percentile)
-
-Versión optimizada pero fiel al original:
-- Mantiene la lógica científica del original
-- NO cambia el cálculo del ratio
-- NO cambia el preprocesado por evento
-- Acelera indexando picks por event_id
-- Reusa v_grid
-- Reusa stream cache por bloque de archivos
-- Separa eventos calculados de eventos no calculados
 
 - Input:
     merged/output/{namebase}_hypodd_catalog.csv
@@ -21,15 +12,15 @@ Versión optimizada pero fiel al original:
 
 - Output:
     1) merged/output/{namebase}_hypodd_catalog_qcfiltered.csv
-       (catálogo base de HypoDD + pc_ratio_energy, solo eventos que pasaron)
+       (base HypoDD catalog + pc_ratio_energy, only events that passed)
 
     2) merged/output/{namebase}_hypodd_catalog_qcrejected.csv
-       (catálogo base de HypoDD + pc_ratio_energy, solo eventos con ratio calculado que NO pasaron)
+       (base HypoDD catalog + pc_ratio_energy, only events with a computed ratio that did NOT pass)
 
     3) merged/output/{namebase}_hypodd_catalog_qcskipped.csv
-       (catálogo base de HypoDD + columnas QC, eventos para los que NO se pudo calcular ratio)
+       (base HypoDD catalog + QC columns, events for which the ratio could NOT be computed)
 
-    4) (opcional) merged/output/qc_plots_{namebase}/qc_eventXXXX_YYYYmmddTHHMMSS.png
+    4) (optional) merged/output/qc_plots_{namebase}/qc_eventXXXX_YYYYmmddTHHMMSS.png
 """
 
 from pathlib import Path
@@ -365,9 +356,9 @@ def qc_one_event(
     min_valid_stations_per_v: int,
 ):
     if not (0.0 < float(noise_percentile) < 100.0 and 0.0 < float(signal_percentile) < 100.0):
-        raise ValueError("noise_percentile y signal_percentile deben estar en (0, 100).")
+        raise ValueError("noise_percentile and signal_percentile must be in the range (0, 100).")
     if float(signal_percentile) <= float(noise_percentile):
-        raise ValueError("signal_percentile debe ser > noise_percentile.")
+        raise ValueError("signal_percentile must be greater than noise_percentile.")
 
     t0 = UTCDateTime(row_event["time"].to_pydatetime())
     ev_lat = float(row_event["latitude"])
@@ -467,7 +458,7 @@ def qc_one_event(
     if not np.any(sig_mask):
         return build_skip_result(eid, "no_valid_signal_band")
 
-    # Mantener exactamente la lógica del original
+    # Preserve the exact logic of the original
     e_noise = safe_percentile(energies, float(noise_percentile))
     e_signal = safe_percentile(energies, float(signal_percentile))
     if not np.isfinite(e_noise) or e_noise <= 0.0:
@@ -687,7 +678,7 @@ def main():
     rejected = raw_out[rejected_mask].copy()
     skipped = raw_out[skipped_mask].copy()
 
-    # Quitar columnas de diagnóstico en filtered y rejected
+    # Remove diagnostic columns from filtered and rejected outputs
     cols_to_drop_final = [c for c in ["qc_status", "qc_reason"] if c in filtered.columns]
     if cols_to_drop_final:
         filtered = filtered.drop(columns=cols_to_drop_final)

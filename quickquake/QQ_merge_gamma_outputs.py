@@ -64,7 +64,7 @@ def _discover_files(
 
 
 def _summarize_discovery(label: str, files: List[Path]) -> None:
-    print(f"[{label}] Encontré {len(files)} archivos")
+    print(f"[{label}] Found {len(files)} files")
     if not files:
         return
 
@@ -74,14 +74,14 @@ def _summarize_discovery(label: str, files: List[Path]) -> None:
 
     invalid_chunk_names = [name for name in counts if not CHUNK_RE.match(name)]
     if invalid_chunk_names:
-        print(f"[{label}][WARN] {len(invalid_chunk_names)} parent dirs no parecen chunks YYYYmmddTHHMMSS.")
+        print(f"[{label}][WARN] {len(invalid_chunk_names)} parent directories do not look like YYYYmmddTHHMMSS.")
         for name in invalid_chunk_names[:10]:
             print(f"  - {name}")
 
     if dup_parent_names:
-        print(f"[{label}][WARN] {len(dup_parent_names)} nombres de chunk repetidos en distintas rutas.")
+        print(f"[{label}][WARN] {len(dup_parent_names)} repeated chunk names found in different paths.")
         for name, n in list(sorted(dup_parent_names.items()))[:10]:
-            print(f"  - {name}: {n} archivos")
+            print(f"  - {name}: {n} files")
 
 
 # ============================================================
@@ -106,7 +106,7 @@ def merge_gamma_picks_with_event_id(
             window_id = f.parent.name
 
             if "event_idx" not in df.columns:
-                raise ValueError(f"Falta 'event_idx' en {f}. Columnas: {list(df.columns)}")
+                raise ValueError(f"Missing 'event_idx' in {f}. Columns: {list(df.columns)}")
 
             mask = df["event_idx"].notna()
             df["event_id"] = pd.NA
@@ -116,18 +116,18 @@ def merge_gamma_picks_with_event_id(
 
             frames.append(df)
         except Exception as e:
-            print(f"[merge picks][WARN] Error leyendo {f}: {e}")
+            print(f"[merge picks][WARN] Error reading {f}: {e}")
 
     if not frames:
-        raise RuntimeError("No se pudo leer ningún gamma_picks.csv. Revisa base_dir y estructura de carpetas.")
+        raise RuntimeError("Could not read any gamma_picks.csv files. Check base_dir and the folder structure.")
 
     merged = pd.concat(frames, ignore_index=True)
     n_unq = merged["event_id"].nunique(dropna=True)
-    print(f"[merge picks] Total picks: {len(merged)} | event_id únicos: {n_unq}")
+    print(f"[merge picks] Total picks: {len(merged)} | unique event_id values: {n_unq}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     merged.to_csv(out_path, index=False)
-    print(f"[merge picks] Guardado: {out_path}")
+    print(f"[merge picks] Saved: {out_path}")
     return out_path
 
 
@@ -153,7 +153,7 @@ def merge_gamma_catalog_with_event_id(
             window_id = f.parent.name
 
             if "event_index" not in df.columns:
-                raise ValueError(f"Falta 'event_index' en {f}. Columnas: {list(df.columns)}")
+                raise ValueError(f"Missing 'event_index' in {f}. Columns: {list(df.columns)}")
 
             mask = df["event_index"].notna()
             df["event_id"] = pd.NA
@@ -163,23 +163,23 @@ def merge_gamma_catalog_with_event_id(
 
             frames.append(df)
         except Exception as e:
-            print(f"[merge catalog][WARN] Error leyendo {f}: {e}")
+            print(f"[merge catalog][WARN] Error reading {f}: {e}")
 
     if not frames:
-        raise RuntimeError("No se pudo leer ningún gamma_catalog.csv. Revisa base_dir y estructura de carpetas.")
+        raise RuntimeError("Could not read any gamma_catalog.csv files. Check base_dir and the folder structure.")
 
     merged = pd.concat(frames, ignore_index=True)
     n_unq = merged["event_id"].nunique(dropna=True)
-    print(f"[merge catalog] Total eventos (filas): {len(merged)} | event_id únicos: {n_unq}")
+    print(f"[merge catalog] Total events (rows):{len(merged)} | unique event_id values: {n_unq}")
     if n_unq > 0 and len(merged) > 3 * n_unq:
         print(
-            "[merge catalog][WARN] El número de filas del catálogo es mucho mayor que el número de event_id únicos. "
-            "Esto no cambia el resultado, pero sí sugiere contaminación o duplicación en la entrada."
+            "[merge catalog][WARN] The number of catalog rows is much larger than the number of unique event_id values. "
+            "This does not change the result, but it suggests contamination or duplication in the input."
         )
 
     out_dir.mkdir(parents=True, exist_ok=True)
     merged.to_csv(out_path, index=False)
-    print(f"[merge catalog] Guardado: {out_path}")
+    print(f"[merge catalog] Saved: {out_path}")
     return out_path
 
 
@@ -191,7 +191,7 @@ def merge_stations_json_unique(
     base_dir: Path,
     out_json: Path,
     pattern: str = "**/stations.json",
-    prefer: str = "first",          # "first" o "last"
+    prefer: str = "first",          # "first" or "last"
     check_conflicts: bool = True,
     tol: float = 1e-6,
     exclude_subtrees: Optional[Iterable[Path]] = None,
@@ -199,7 +199,7 @@ def merge_stations_json_unique(
 
     files = _discover_files(base_dir, pattern, exclude_subtrees=exclude_subtrees)
     if not files:
-        raise FileNotFoundError(f"No encontré stations.json con patrón '{pattern}' dentro de {base_dir}")
+        raise FileNotFoundError(f"Could not find stations.json with pattern '{pattern}' inside {base_dir}")
 
     _summarize_discovery("merge stations", files)
 
@@ -232,11 +232,11 @@ def merge_stations_json_unique(
         try:
             d = json.loads(f.read_text())
         except Exception as e:
-            conflicts.append(f"[WARN] No pude leer {f}: {e}")
+            conflicts.append(f"[WARN] Could not read {f}: {e}")
             continue
 
         if not isinstance(d, dict):
-            conflicts.append(f"[WARN] {f} no es un dict JSON. Saltando.")
+            conflicts.append(f"[WARN] {f} is not a JSON dictionary. Skipping.")
             continue
 
         for sid, meta in d.items():
@@ -245,7 +245,7 @@ def merge_stations_json_unique(
                 continue
 
             if check_conflicts and not same_station_meta(merged[sid], meta):
-                conflicts.append(f"[CONFLICT] {sid} difiere. Mantengo '{prefer}'. Archivo: {f}")
+                conflicts.append(f"[CONFLICT] {sid} differs. Keeping '{prefer}'. File: {f}")
                 if prefer == "last":
                     merged[sid] = meta
             else:
@@ -255,11 +255,11 @@ def merge_stations_json_unique(
     out_json.parent.mkdir(parents=True, exist_ok=True)
     out_json.write_text(json.dumps(merged, indent=2, sort_keys=True))
 
-    print(f"[merge stations] Estaciones únicas: {len(merged)}")
-    print(f"[merge stations] Guardado: {out_json}")
+    print(f"[merge stations] Unique stations: {len(merged)}")
+    print(f"[merge stations] Saved: {out_json}")
 
     if conflicts:
-        print(f"[merge stations][WARN] Conflictos/avisos: {len(conflicts)} (muestro hasta 10)")
+        print(f"[merge stations][WARN] Conflicts/warnings: {len(conflicts)} (showing up to 10)")
         for msg in conflicts[:10]:
             print("  " + msg)
 
@@ -267,7 +267,7 @@ def merge_stations_json_unique(
 
 
 # ============================================================
-# Orquestador del merge (lo que llama RunAll)
+# Merge orchestrator called by driver
 # ============================================================
 
 def run_merge_block(
@@ -293,11 +293,11 @@ def run_merge_block(
 
     exclude_subtrees = [merged_dir]
 
-    # 1) Merge CSVs con event_id
+    # 1) Merge CSVs with event_id
     picks_out = merge_gamma_picks_with_event_id(data_root, merged_dir, exclude_subtrees=exclude_subtrees)
     catalog_out = merge_gamma_catalog_with_event_id(data_root, merged_dir, exclude_subtrees=exclude_subtrees)
 
-    # 2) Merge stations único (SIN duplicar, mismo formato)
+    # 2) Merge unique stations without duplication, preserving the same format
     station_out = indir / f"{namebase}_station_list.json"
     merge_stations_json_unique(
         base_dir=data_root,
@@ -308,7 +308,7 @@ def run_merge_block(
         exclude_subtrees=exclude_subtrees,
     )
 
-    print("\n✅ Merge terminado.")
+    print("\n Merge completed.")
     print(f" - Picks merged   : {picks_out}")
     print(f" - Catalog merged : {catalog_out}")
     print(f" - Station list   : {station_out}")
@@ -324,11 +324,11 @@ def run_merge_block(
 def parse_args():
     p = argparse.ArgumentParser(description="Merge GaMMA outputs across chunks and prepare HypoXPy inputs.")
     p.add_argument("--data_root", type=str, required=True,
-                   help="Directorio base donde están los chunks (ej: .../QuickQuake/data)")
+                   help="Base directory containing the chunks (e.g., .../QuickQuake/data)")
     p.add_argument("--merged_dir", type=str, default=None,
-                   help="Directorio destino merged (default: <data_root>/merged)")
+                   help= "Destination merged directory (default: <data_root>/merged)")
     p.add_argument("--namebase", type=str, default="GAMMA",
-                   help="Prefijo para station_list.json (default: GAMMA)")
+                   help="Prefix for station_list.json (default: GAMMA)")
     return p.parse_args()
 
 

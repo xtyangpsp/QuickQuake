@@ -255,7 +255,7 @@ def main():
         verbose=True,
     )
 
-    print("\n Relocation terminado.")
+    print("\n Relocation tcompleted.")
     print(f"   Working dir : {merged_dir}")
     print(f"   Input dir   : {indir}")
     print(f"   Output dir  : {outdir}")

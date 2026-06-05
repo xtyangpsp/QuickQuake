@@ -26,7 +26,7 @@ DATA_ROOT = BASE_DIR / "data"
 MODEL_DIR = BASE_DIR / "dependencies/PhaseNet/model/190703-214543"
 
 
-RUN_CONFIG   =  False
+RUN_CONFIG   =  True
 
 # config options (user edits )
 center   = (-161.8903, 55.4133) # central cooordinates for your region of interest 
@@ -36,16 +36,16 @@ channels = "BHZ,BHN,BHE,SHZ,SHN,SHE"
 client   = "IRIS"
 region   = "pavlof"
 
-RUN_DL       = False
+RUN_DL       = True
 
-RUN_PHASENET = False
+RUN_PHASENET = True
 # phasenet options (user edits )
 phasenet_min_p_prob = 0.30
 phasenet_min_s_prob = 0.30
 phasenet_mpd        = 50  # minimum peak distance
 
 
-RUN_GAMMA    = False
+RUN_GAMMA    = True
 # gamma options (user edits )
 gamma_method           = "BGMM"   # default: BGMM
 gamma_oversample_factor = 30       # default: 30 for BGMM
@@ -84,7 +84,7 @@ arpick_keep_debug_cols = True     # Save debug columns in output CSV
 RUN_LOCATION      =  True
 location_binpath = "/home/elizabeth/bin"
 location_namebase = "GAMMA"
-location_extra_args = []  # ej: ["--cleanup"]
+location_extra_args = []   # e.g., ["--cleanup"]
 location_p_model = "velo_p_rv_avo.cre"
 location_s_model = "velo_s_rv_avo.cre"
 location_ref_ele = 3.2 #reference location highest part in the topography 
@@ -107,7 +107,7 @@ qc_signal_percentile = 90.0
 qc_min_ratio = 5.0 
 qc_energy_type = "squared_median" # other option is "envelope_median" or "squared_median"
 qc_make_plot = True
-qc_max_plots = 50 #None change 
+qc_max_plots = 50 # Set to None to disable the limit
 
 # SCRIPTS 
 
@@ -204,7 +204,7 @@ def process_window(start, end, out_dir: Path):
     for enabled, cmd, name in steps:
         if enabled:
             if name == "GaMMA" and not picks.exists():
-                print(f"[SKIP] GaMMA: does not exit {picks} (PhaseNet failed or there was no data).")
+                print(f"[SKIP] GaMMA: does not exist {picks} (PhaseNet failed or there was no data).")
                 continue
             try:
                 run_step(cmd, name, cwd=BASE_DIR)

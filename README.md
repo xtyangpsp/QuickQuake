@@ -88,9 +88,10 @@ The settings you will change most often:
 | `center`, `deg` | `(longitude, latitude)` of the area, and the width (degrees) of the box around it where GaMMA searches for events |
 | `station_maxradius` | Every seismic station of every network within this distance (degrees) of `center` is used; the best channel set of each station is chosen from the data actually available |
 | `station_excluded_networks`, `station_excluded_stations` | Networks (e.g. `"SY"`, synthetic data) and stations (as `"NET.STA"`, e.g. `"DK.ILULI"`) to leave out |
+| `download_resample_rate` | Every downloaded channel is saved at this rate (default 100 Hz, the rate PhaseNet was trained on). Faster channels are low-pass filtered at 0.4 × this rate and then resampled; slower ones are interpolated (Lanczos), with a warning. `None` keeps the native rate of each channel |
 | `gamma_use_dbscan` | `True` (default): DBSCAN groups on several CPUs (`gamma_ncpu`), much faster. `False`: one job on one CPU (original method); choose `gamma_dbscan_eps` by comparing DBSCAN on and off on one chunk (see the comments in `QQ_driver.py`) |
 | `location_p_model`, `location_s_model` | Velocity models: a file in `hypox_templates/` or a path to your own `.cre` file. HypoInverse and HypoDD both use them: `QQ_location.py` writes them into HypoDD's parameter file |
-| `location_ref_ele` | Reference elevation of the velocity models (highest station or topography, km) |
+| `location_ref_ele` | Reference elevation of the velocity models (highest station or topography, km). HypoInverse and HypoDD measure depth from it, so events in the volcanic edifice are kept; the final catalogs give depth below sea level |
 | `qc_max_plots` | Number of QC figures (default 20; `None` = one for every event) |
 
 Use one project folder per region and period: the merge step combines **every** chunk folder inside `data/`.

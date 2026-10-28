@@ -18,7 +18,9 @@ This script will:
   <repo>/hypox_templates or a full path to your own .cre file)
 - Write the same velocity models into the HypoDD template copy, so HypoInverse
   and HypoDD locate with one model
-- Run hypoxpy.workflow.relocate()
+- Run hypoxpy.workflow.relocate(), with HypoDD measuring depth from the top of
+  the velocity model (ref_ele) so that events in the volcanic edifice, above sea
+  level, are kept
 
 Outputs (in <data_root>/merged/output/):
 - <namebase>_hypoinv_good.csv
@@ -30,10 +32,12 @@ import json
 import argparse
 import shutil
 from collections import defaultdict
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import hypoxpy.utils as hypox_utils
 from hypoxpy.workflow import relocate
 from typing import Optional
 
@@ -152,11 +156,10 @@ def hypodd_model_block(pmodel: Path, smodel: Path, ref_ele: float):
     relocation use the same velocities. IMOD = 1: layered Vp with one Vp/Vs ratio
     per layer, taken from the P and S models.
 
-    Depth datum: HypoInverse reports CRE depths below sea level, and HypoDD 2.1
-    measures layer tops and event depths from sea level, then adds each station's
-    elevation (partials.f). The CRE layer tops are measured from the top of the
-    model, ref_ele km above sea level, so each one moves up by ref_ele. HypoDD's
-    first layer starts at 0 and reaches up to every station, like the top CRE layer.
+    Depth datum: the CRE layer tops are measured from the top of the model, which
+    HypoInverse places at ref_ele km above sea level. HypoDD measures depth from
+    the same place (see hypodd_depths_from_model_top), so the layer tops are the
+    CRE tops unchanged.
     """
     vp, top_p = read_cre_model(pmodel)
     vs, top_s = read_cre_model(smodel)
@@ -165,10 +168,7 @@ def hypodd_model_block(pmodel: Path, smodel: Path, ref_ele: float):
                          f"(IMOD = 1): {pmodel.name} {top_p}, {smodel.name} {top_s}")
     if top_p[0] != 0.0:
         raise ValueError(f"The first layer of {pmodel.name} must start at depth 0, not {top_p[0]}")
-    top = [0.0] + [t - ref_ele for t in top_p[1:]]
-    if len(top) > 1 and top[1] <= 0.0:
-        raise ValueError(f"location_ref_ele ({ref_ele} km) is not smaller than the first "
-                         f"layer of {pmodel.name} ({top_p[1]} km): the layer would lie above sea level")
+    top = top_p
     ratio = [p / s for p, s in zip(vp, vs)]
 
     def row(values, ndigits):
@@ -177,9 +177,8 @@ def hypodd_model_block(pmodel: Path, smodel: Path, ref_ele: float):
     return [
         "*--- FORWARD MODEL SPECIFICATIONS:\n",
         f"* Written by QuickQuake (QQ_location.py) from the HypoInverse models {pmodel.name}\n",
-        f"* and {smodel.name}, with layer tops moved from the model top (reference\n",
-        f"* elevation {ref_ele} km) to sea level, the depth datum of HypoInverse CRE\n",
-        "* depths and of HypoDD station elevations.\n",
+        f"* and {smodel.name}. Depths (layer tops and events) are measured from the\n",
+        f"* top of the model, {ref_ele} km above sea level (location_ref_ele).\n",
         "* IMOD\n",
         "1\n",
         "* TOP:\n",
@@ -212,6 +211,39 @@ def write_hypodd_template(template: Path, dst: Path, pmodel: Path, smodel: Path,
         dst.unlink()
     with open(dst, "w") as fp:
         fp.writelines(lines)
+
+
+@contextmanager
+def hypodd_depths_from_model_top(ref_ele: float, indir: Path):
+    """
+    HypoDD 2.1 does not accept events above its depth zero: getdata.f moves any
+    depth shallower than 0.01 km down to 0.01 km, and an event that moves above
+    zero is an air quake. HypoInverse reports CRE depths below sea level, so events
+    in the volcanic edifice (up to the model top, -ref_ele) are negative and HypoDD
+    would push them down to sea level or drop them.
+
+    HypoDD therefore measures depth from the model top: while relocate() writes the
+    HypoDD phase file, it reads a copy of the event catalog with every depth
+    + ref_ele (the HypoInverse catalog itself is not changed). HypoXPy's dep_corr,
+    set to ref_ele, subtracts it again when it writes <namebase>_hypodd_catalog.csv,
+    so that catalog stays below sea level like HypoInverse. hypoDD_<namebase>.reloc
+    keeps HypoDD's own depths, from the model top.
+    """
+    original = hypox_utils.convert_gamma2hypodd
+
+    def convert_from_model_top(eventfile, pickfile, *args, **kwargs):
+        events = pd.read_csv(eventfile, sep=kwargs.get("separator", ","))
+        label, scale = hypox_utils.resolve_event_depth_column(events)
+        events[label] = events[label] + ref_ele / scale
+        shifted = indir / f"{Path(eventfile).stem}_depth_from_model_top.csv"
+        events.to_csv(shifted, index=False, sep=kwargs.get("separator", ","))
+        return original(str(shifted), pickfile, *args, **kwargs)
+
+    hypox_utils.convert_gamma2hypodd = convert_from_model_top
+    try:
+        yield
+    finally:
+        hypox_utils.convert_gamma2hypodd = original
 
 
 def resolve_model(model: str, templates_dir: Path) -> Path:
@@ -283,7 +315,7 @@ def stage_in_merged(merged_dir: Path, templates_dir: Path, namebase: str,
     # HypoDD gets the same velocity model as HypoInverse, written into its template copy
     write_hypodd_template(t_hypodd, indir / t_hypodd.name, pmodel, smodel, ref_ele)
     print(f"[location] HypoDD velocity model written from {pmodel.name} and {smodel.name} "
-          f"(layer tops moved up by ref_ele = {ref_ele} km to sea level)")
+          f"(depths from the model top, ref_ele = {ref_ele} km above sea level)")
 
     return indir, outdir, pmodel.name, smodel.name
 
@@ -331,7 +363,8 @@ def main():
     ap.add_argument("--s_model", default="velo_s_eg.cre",
                     help="S-wave velocity model: a file name inside templates_dir, or a full path to your own .cre file")
     ap.add_argument("--ref_ele", type=float, default=3.0,
-                    help="Reference elevation for HypoInverse")
+                    help="Reference elevation (km above sea level): top of the velocity models, "
+                         "usually the highest topography. HypoInverse and HypoDD measure depth from it")
 
     # sensible defaults for your repo layout
     ap.add_argument("--merged_dir", default=None, help="Default: <repo>/data/merged")
@@ -343,7 +376,6 @@ def main():
     ap.add_argument("--depth_max", type=float, default=20.0)
     ap.add_argument("--depth_step", type=float, default=1.0)
     ap.add_argument("--picks_file", default=None, help="Optional picks CSV to use instead of merged/gammapicks_id.csv")
-    ap.add_argument("--dep_corr", type=float, default=0.0)
     ap.add_argument("--cleanup", action="store_true")
     ap.add_argument("--qc_phase", action="store_true")  # default False
     ap.add_argument("--skip_hypoinverse", action="store_true")
@@ -456,20 +488,21 @@ def main():
         },
 
         "hypodd": {
-            "dep_corr": float(args.dep_corr), # 0.0
+            "dep_corr": float(args.ref_ele),   # HypoDD depths are from the model top: see hypodd_depths_from_model_top
             "ph2dt_template": os.path.join(indir_rel, "template_ph2dt_par.inp"),
             "hypodd_template": os.path.join(indir_rel, "template_hypodd_par.inp"),
         },
     }
 
-    relocate(
-        hypox_pars,
-        input_type="gamma",
-        skip_hypoinverse=args.skip_hypoinverse,
-        skip_hypodd=args.skip_hypodd,
-        allow_skip_hypoinverse=False,
-        verbose=True,
-    )
+    with hypodd_depths_from_model_top(args.ref_ele, Path(indir_rel)):
+        relocate(
+            hypox_pars,
+            input_type="gamma",
+            skip_hypoinverse=args.skip_hypoinverse,
+            skip_hypodd=args.skip_hypodd,
+            allow_skip_hypoinverse=False,
+            verbose=True,
+        )
 
     print("\nRelocation completed.")
     print(f"   Working dir : {merged_dir}")

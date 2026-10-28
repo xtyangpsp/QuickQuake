@@ -157,7 +157,30 @@ class StreamCache:
             self._st = None
             return None, list(files)
 
-        st.merge(fill_value="interpolate")
+        # Some stations report a rate a hair off the nominal one (e.g., 99.99994659 Hz
+        # in one file and 100.0 Hz in the next), and obspy refuses to merge them.
+        # Snap rates within 0.01 % of a whole number to that number.
+        for tr in st:
+            sr = float(tr.stats.sampling_rate)
+            sr_round = round(sr)
+            if sr_round > 0 and sr != sr_round and abs(sr - sr_round) / sr_round < 1e-4:
+                tr.stats.sampling_rate = float(sr_round)
+
+        try:
+            st.merge(fill_value="interpolate")
+        except Exception:
+            # Truly different rates on one channel: merge channel by channel and
+            # drop only the channels that still cannot be merged.
+            merged = obspy.Stream()
+            for tr_id in sorted({tr.id for tr in st}):
+                sub = st.select(id=tr_id)
+                try:
+                    sub.merge(fill_value="interpolate")
+                    merged += sub
+                except Exception as e:
+                    print(f"[QC] skipping {tr_id} in {[f.name for f in files]}: {e}")
+            st = merged
+
         self._key = key
         self._st = st
         return st, list(files)

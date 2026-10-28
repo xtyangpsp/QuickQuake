@@ -9,7 +9,8 @@ Design:
 - try only the best family first
 - if unavailable / insufficient coverage / missing response, try next family
 - stop after the first valid family
-- keep native sample rate; PhaseNet resamples later
+- save every channel at RESAMPLE_RATE (100 Hz, the rate PhaseNet was trained on);
+  --resample_rate 0 keeps the native sample rate
 - keep exactly one selected representation per physical station
 """
 
@@ -21,6 +22,7 @@ import argparse
 import copy
 from collections import defaultdict
 
+import numpy as np
 import obspy
 from obspy import UTCDateTime
 from obspy.clients.fdsn import Client, RoutingClient
@@ -34,6 +36,11 @@ from obspy.io.mseed import InternalMSEEDError
 
 TARGET_RATE = 100.0
 MIN_SAMPLE_RATE = 20.0
+
+# Every saved channel is resampled to this rate (Hz): PhaseNet was trained on
+# 100 Hz data, and the QC cannot merge one channel stored at two rates.
+# 0 keeps the native rate of each channel.
+RESAMPLE_RATE = 100.0
 
 # Require substantial coverage in each selected component.
 # Easy to change later if Greenland data contain systematic gaps.
@@ -1447,6 +1454,94 @@ def combine_selected_inventories(
 
 
 # ============================================================
+# RESAMPLING
+# ============================================================
+
+def resample_stream(
+    stream,
+    rate,
+):
+    """
+    Bring every trace of the stream to `rate` Hz, in place.
+
+    - faster than `rate`: low-pass at 0.4 * rate first (anti-alias), then
+      interpolate; without the filter, energy above the new Nyquist
+      frequency would fold back as false low frequencies
+    - slower than `rate`: interpolate only; this adds samples but no
+      signal above the native Nyquist frequency
+    - within 0.01 % of `rate` (clock jitter, e.g. 99.99994659 Hz): interpolate
+    - rate <= 0: nothing is changed
+
+    Interpolation is Lanczos (a = 20), which keeps the 1-15 Hz amplitudes.
+    ObsPy's "weighted_average_slopes" (used by seisgo) keeps only 77 % of a
+    15 Hz wave recorded at 40 Hz, and on short segments it can return a
+    garbage last sample (e.g. 4.7e200).
+
+    Integer counts stay integers, so MiniSEED keeps its compression.
+
+    Returns {trace id: native rate} for the upsampled traces.
+    """
+    upsampled = {}
+
+    if not rate or rate <= 0:
+        return upsampled
+
+    for trace in list(
+        stream
+    ):
+        native = float(
+            trace.stats.sampling_rate
+        )
+
+        if native == rate:
+            continue
+
+        dtype = trace.data.dtype
+
+        try:
+            if native > rate * (1 + 1e-4):
+                trace.filter(
+                    "lowpass",
+                    freq=0.4 * rate,
+                    corners=8,
+                    zerophase=True,
+                )
+            elif native < rate * (1 - 1e-4):
+                upsampled[
+                    trace.id
+                ] = native
+
+            trace.interpolate(
+                sampling_rate=rate,
+                method="lanczos",
+                a=20,
+            )
+        except Exception as err:
+            # e.g. a segment of one sample cannot be interpolated
+            print(
+                f"    warning: dropping a segment of {trace.id} "
+                f"({trace.stats.npts} samples) that could not be "
+                f"resampled: {err}"
+            )
+            stream.remove(
+                trace
+            )
+            continue
+
+        if np.issubdtype(
+            dtype,
+            np.integer,
+        ):
+            trace.data = np.round(
+                trace.data
+            ).astype(
+                dtype
+            )
+
+    return upsampled
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -1631,6 +1726,23 @@ def download_waveforms(
                 ]
             ]
         )
+
+        # Resample before merging, so a channel that changed rate
+        # within the chunk merges into one trace.
+        upsampled = resample_stream(
+            chosen_stream,
+            RESAMPLE_RATE,
+        )
+
+        for trace_id, native in sorted(
+            upsampled.items()
+        ):
+            print(
+                f"    warning: {trace_id} is sampled at "
+                f"{native:g} Hz, below {RESAMPLE_RATE:g} Hz; "
+                f"upsampled by interpolation (no signal above "
+                f"{native / 2:g} Hz)"
+            )
 
         try:
             chosen_stream.merge(
@@ -1842,6 +1954,15 @@ def download_waveforms(
         )
 
     print(
+        "Saved at: "
+        + (
+            f"{RESAMPLE_RATE:g} Hz"
+            if RESAMPLE_RATE > 0
+            else "native sample rates"
+        )
+    )
+
+    print(
         f"\nWaveforms saved at: "
         f"{outpath}"
     )
@@ -1884,6 +2005,14 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
+        "--resample_rate",
+        type=float,
+        default=RESAMPLE_RATE,
+        help=f"Save every channel at this rate, in Hz; 0 keeps the native rate "
+             f"(default: {RESAMPLE_RATE:g}, the rate PhaseNet was trained on)",
+    )
+
+    parser.add_argument(
         "--min_coverage",
         type=float,
         default=MIN_COVERAGE_FRACTION,
@@ -1917,6 +2046,7 @@ if __name__ == "__main__":
     # Command-line options override the module defaults
     TARGET_RATE = float(args.target_rate)
     MIN_SAMPLE_RATE = float(args.min_sample_rate)
+    RESAMPLE_RATE = float(args.resample_rate)
     MIN_COVERAGE_FRACTION = float(args.min_coverage)
     MAX_TRANSIENT_RETRIES = int(args.max_retries)
     RETRY_SLEEP_SECONDS = float(args.retry_sleep_s)

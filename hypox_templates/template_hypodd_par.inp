@@ -77,9 +77,9 @@ hypoDD.src
 *
 *--- FORWARD MODEL SPECIFICATIONS:
 * QuickQuake replaces this section at run time (QQ_location.py) with the
-* HypoInverse velocity models (location_p_model and location_s_model), their
-* layer tops moved from location_ref_ele to sea level, so that HypoInverse and
-* HypoDD use the same model (IMOD = 1, one Vp/Vs ratio per layer).
+* HypoInverse velocity models (location_p_model and location_s_model), so that
+* HypoInverse and HypoDD use the same model (IMOD = 1, one Vp/Vs ratio per layer).
+* HypoDD depths are measured from the top of the model (location_ref_ele).
 *
 *--- CLUSTER/EVENT SELECTION:
 * CID

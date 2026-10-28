@@ -57,6 +57,8 @@ download_max_retries = 3             # attempts after a download error
 download_retry_sleep = 3             # seconds between attempts
 download_fallback_clients = ["EARTHSCOPE", "GEOFON", "ETH"]  # backup data centers tried in order when the
                                      # federator has no data (GEOFON serves DK.GDH, ETH DK.KARAT)
+download_resample_rate = 100.0       # save every channel at this rate (Hz), the rate PhaseNet was trained on;
+                                     # None = keep the native rate of each channel
 
 RUN_PHASENET = True
 # phasenet options (user edits )

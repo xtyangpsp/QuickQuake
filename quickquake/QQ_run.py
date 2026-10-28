@@ -48,6 +48,7 @@ DEFAULTS = {
     "download_max_retries": 3,
     "download_retry_sleep": 3,
     "download_fallback_clients": ["EARTHSCOPE", "GEOFON", "ETH"],
+    "download_resample_rate": 100.0,
     "RUN_PHASENET": True,
     "phasenet_min_p_prob": 0.30,
     "phasenet_min_s_prob": 0.30,
@@ -250,6 +251,7 @@ def process_window(start, end, out_dir: Path):
         "--fallback_clients", ",".join(download_fallback_clients),
         "--max_retries", str(download_max_retries),
         "--retry_sleep_s", str(download_retry_sleep),
+        "--resample_rate", str(download_resample_rate or 0),
     ]
 
     # GaMMA options that are added only when used
